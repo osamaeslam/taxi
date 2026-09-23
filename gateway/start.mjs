@@ -4,8 +4,8 @@
  * يضبط متغيرات البيئة الافتراضية ويشغل البوابة بأمان دون مشاكل تشفير الـ CMD
  */
 
-process.env.ADMIN_KEY = process.env.ADMIN_KEY || 'TaxiAdmin_2026!x1';
-process.env.WORKER_URL = process.env.WORKER_URL || 'https://whatsapp-taxi-dispatch.abdalganih2.workers.dev';
+process.env.ADMIN_KEY = process.env.ADMIN_KEY || 'taxi-admin-2025';
+process.env.WORKER_URL = process.env.WORKER_URL || 'http://127.0.0.1:3000';
 process.env.GATEWAY_PORT = process.env.GATEWAY_PORT || '3010';
 
 console.log('============================================================');

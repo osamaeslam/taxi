@@ -218,6 +218,32 @@ export default {
       });
     }
 
+    // ─── مسارات وسيط بوابة واتساب (WhatsApp Gateway Proxy) ───
+    if (path.startsWith('/api/gateway/')) {
+      const targetPath = path.slice('/api/gateway'.length);
+      const gwUrl = `http://127.0.0.1:3010${targetPath}${url.search}`;
+      try {
+        const bodyText = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.text();
+        const gRes = await fetch(gwUrl, {
+          method: request.method,
+          headers: {
+            'content-type': 'application/json',
+            'x-gateway-token': env.ADMIN_KEY,
+          },
+          body: bodyText,
+        });
+        const respText = await gRes.text();
+        return new Response(respText, {
+          status: gRes.status,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+          },
+        });
+      } catch (err: any) {
+        return Response.json({ error: 'Gateway offline', details: err?.message }, { status: 502 });
+      }
+    }
+
     if (path.startsWith('/ticket/')) {
       const code = decodeURIComponent(path.slice('/ticket/'.length));
 

@@ -34,7 +34,7 @@ function normToChat(to: string): string {
   return d + '@s.whatsapp.net';
 }
 
-const GATEWAY_URL = 'https://almaih.cloud/g';
+const GATEWAY_URL = process.env.GATEWAY_URL || 'http://127.0.0.1:3010';
 
 /** حالة البوابة من خادم البوت (QR/كود اقتران) — null إذا غير متاح */
 async function gatewayStatus(adminKey: string): Promise<Record<string, any> | null> {

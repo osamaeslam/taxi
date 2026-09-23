@@ -4,6 +4,7 @@ import { getDatabase } from './src/db.js';
 import { runSupervisor } from './src/supervisor.js';
 import type { Env } from './src/types.js';
 import dotenv from 'dotenv';
+import { fork } from 'child_process';
 
 dotenv.config();
 
@@ -36,6 +37,37 @@ const env: Env = {
   AI_MODEL: process.env.AI_MODEL,
 };
 
+// تشغيل بوابة واتساب تلقائياً في الخلفية
+let gatewayChild: any = null;
+
+function ensureGatewayRunning() {
+  if (process.env.VERCEL) return;
+  if (gatewayChild && !gatewayChild.killed && gatewayChild.exitCode === null) {
+    return;
+  }
+  try {
+    const gatewayEnv = {
+      ...process.env,
+      ADMIN_KEY: env.ADMIN_KEY,
+      WORKER_URL: 'http://127.0.0.1:3000',
+      GATEWAY_PORT: '3010',
+    };
+    gatewayChild = fork('./gateway/start.mjs', [], {
+      env: gatewayEnv,
+      stdio: 'inherit',
+      cwd: process.cwd(),
+    });
+    gatewayChild.on('error', (e: any) => console.warn('[Gateway Child Error]', e));
+    gatewayChild.on('exit', (code: any) => {
+      console.log(`[Gateway Child Exit] code=${code}. Restarting in 5s...`);
+      gatewayChild = null;
+      setTimeout(ensureGatewayRunning, 5000);
+    });
+  } catch (err) {
+    console.warn('[Gateway Child Start Error]', err);
+  }
+}
+
 // Periodic background supervisor (run only in continuous server environments, not Vercel serverless)
 if (!process.env.VERCEL) {
   setInterval(async () => {
@@ -46,6 +78,38 @@ if (!process.env.VERCEL) {
     }
   }, 30000);
 }
+
+// Proxy requests to the WhatsApp Gateway
+app.all('/api/gateway/*', async (req, res) => {
+  const targetPath = req.path.replace(/^\/api\/gateway/, '');
+  const query = req.url.includes('?') ? '?' + req.url.split('?')[1] : '';
+  const gatewayUrl = `http://127.0.0.1:3010${targetPath}${query}`;
+  try {
+    const adminKey = env.ADMIN_KEY;
+    const bodyData = ['GET', 'HEAD'].includes(req.method)
+      ? undefined
+      : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+
+    const gRes = await fetch(gatewayUrl, {
+      method: req.method,
+      headers: {
+        'content-type': 'application/json',
+        'x-gateway-token': adminKey,
+      },
+      body: bodyData,
+    });
+    const data = await gRes.text();
+    res.status(gRes.status);
+    gRes.headers.forEach((v, k) => {
+      if (k.toLowerCase() !== 'content-length') {
+        res.setHeader(k, v);
+      }
+    });
+    res.send(data);
+  } catch (err: any) {
+    res.status(502).json({ error: 'Gateway offline', details: err?.message });
+  }
+});
 
 // Route all requests to worker.fetch
 app.all('*', async (req, res) => {
@@ -104,6 +168,7 @@ export default app;
 if (!process.env.VERCEL) {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚕 منظومة العياط وباصات الجامعات تعمل على http://0.0.0.0:${PORT}`);
+    ensureGatewayRunning();
   });
 }
 

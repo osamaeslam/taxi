@@ -804,7 +804,7 @@ function timingSafeEq(a, b) {
 }
 function checkToken(req, url) {
   const t = req.headers['x-gateway-token'] || url.searchParams.get('token') || '';
-  return GATEWAY_TOKEN.length >= 16 && timingSafeEq(t, GATEWAY_TOKEN);
+  return GATEWAY_TOKEN.length >= 8 && timingSafeEq(t, GATEWAY_TOKEN);
 }
 
 // قراءة جسم آمن: حد حجم + JSON بلا انهيار
