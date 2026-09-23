@@ -36,14 +36,16 @@ const env: Env = {
   AI_MODEL: process.env.AI_MODEL,
 };
 
-// Periodic background supervisor
-setInterval(async () => {
-  try {
-    await runSupervisor(env);
-  } catch (e) {
-    // silent
-  }
-}, 30000);
+// Periodic background supervisor (run only in continuous server environments, not Vercel serverless)
+if (!process.env.VERCEL) {
+  setInterval(async () => {
+    try {
+      await runSupervisor(env);
+    } catch (e) {
+      // silent
+    }
+  }, 30000);
+}
 
 // Route all requests to worker.fetch
 app.all('*', async (req, res) => {

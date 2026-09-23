@@ -2,8 +2,25 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-export function getDatabase(dbPath = './taxi-dispatch.sqlite') {
-  const sqlite = new DatabaseSync(dbPath);
+export function getDatabase(dbPath?: string) {
+  // On Vercel Serverless / Lambda, root file system is read-only.
+  // SQLite must be placed in /tmp or use memory / environment override.
+  const isVercel = Boolean(process.env.VERCEL);
+  const resolvedDbPath = dbPath || (isVercel ? '/tmp/taxi-dispatch.sqlite' : './taxi-dispatch.sqlite');
+
+  // If running on Vercel and existing seed database exists in project root, copy it over to /tmp once
+  if (isVercel && resolvedDbPath.startsWith('/tmp/')) {
+    try {
+      const sourceDb = path.resolve(process.cwd(), 'taxi-dispatch.sqlite');
+      if (fs.existsSync(sourceDb) && !fs.existsSync(resolvedDbPath)) {
+        fs.copyFileSync(sourceDb, resolvedDbPath);
+      }
+    } catch (e) {
+      console.warn('[Database] Could not copy initial db file to /tmp, will initialize freshly:', e);
+    }
+  }
+
+  const sqlite = new DatabaseSync(resolvedDbPath);
   
   // Enable foreign keys
   sqlite.exec('PRAGMA foreign_keys = ON;');
