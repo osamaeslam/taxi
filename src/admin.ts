@@ -58,7 +58,6 @@ const NAV: Array<{ id: string; href: string; label: string }> = [
   { id: 'clients', href: '/admin/clients', label: '👥 دليل العملاء والركاب' },
   { id: 'rides', href: '/admin/rides', label: '🧾 المشاوير والتفاوض' },
   { id: 'drivers', href: '/admin/drivers', label: '🚗 كباتن وسيارات العياط' },
-  { id: 'simulator', href: '/admin/simulator', label: '🧪 محاكي واتساب والتفاوض' },
   { id: 'chats', href: '/admin/chats', label: '💬 المحادثات' },
   { id: 'pricing', href: '/admin/pricing', label: '💰 تسعير القرى والأحزمة' },
   { id: 'issues', href: '/admin/issues', label: '⚠️ المشاكل' },
@@ -1301,17 +1300,18 @@ function saveSettings(ev, f) {
   <div style="background:#075e54;color:#fff;padding:12px 16px;display:flex;align-items:center;gap:12px;">
     <div style="width:40px;height:40px;border-radius:50%;background:#128c7e;display:flex;align-items:center;justify-content:center;font-size:22px;">🚕</div>
     <div style="flex:1;">
-      <div style="font-weight:bold;font-size:15px;">بوت منظومة العياط والجامعات (WhatsApp)</div>
-      <div style="font-size:12px;opacity:0.85;" id="sim-online-status">متصل — محرك التفاوض وحجز الجامعات نشط 🟢</div>
+      <div style="font-weight:bold;font-size:15px;">كابتن عز لخدمات النقل الذكي والمشاوير 🟢</div>
+      <div style="font-size:12px;opacity:0.85;" id="sim-online-status">بوت متصل — محرك الحجز والتفاوض الذكي نشط 24/7 ⚡</div>
     </div>
     <a href="/admin/rides?key=${escHtml(key)}" style="color:#dcf8c6;font-size:13px;text-decoration:none;background:rgba(255,255,255,0.15);padding:6px 12px;border-radius:6px;">🧾 المشاوير والتفاوض ↗</a>
   </div>
   <div id="sim-messages" style="background:#efeae2;height:420px;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;">
-    <div style="text-align:center;margin-bottom:8px;"><span style="background:rgba(225,245,254,0.95);color:#0288d1;font-size:12px;padding:4px 12px;border-radius:12px;border:1px solid #b3e5fc;">🔒 محاكاة واتساب متصلة بنظام المشاوير والتفاوض وقاعدة البيانات الحية</span></div>
+    <div style="text-align:center;margin-bottom:8px;"><span style="background:rgba(225,245,254,0.95);color:#0288d1;font-size:12px;padding:4px 12px;border-radius:12px;border:1px solid #b3e5fc;">🔒 محاكي واتساب كابتن عز — متصل مباشرة برادار الحضور وقاعدة البيانات الحية</span></div>
     <div style="align-self:flex-start;max-width:80%;background:#fff;color:#111;padding:10px 14px;border-radius:8px 8px 8px 0;box-shadow:0 1px 2px rgba(0,0,0,0.1);font-size:14px;line-height:1.5;">
-      أهلاً بك في منظومة العياط لنقل الجامعات والمشاوير الخاصة! 🚕🇪🇬<br>
-      يمكنك طلب مشوارك مع تحديد السعر، وسيقوم الكباتن بالرد عليك مباشرة.<br>
-      جرب كتابة: <b>«مشوار من العياط لجامعة القاهرة بـ 250 جنيه»</b> أو <b>«مواعيد الجامعات»</b>
+      أهلاً بك في بوت <b>كابتن عز لخدمات النقل الذكي والمشاوير</b> بالعياط وقراها! 🚕🇪🇬<br>
+      • لحجز باصات الجامعات أو الاستفسار: اكتب <b>«مواعيد الجامعات»</b> أو <b>«حجز جامعة القاهرة»</b>.<br>
+      • عند صعودك الباص لتسجيل حضورك: اكتب فقط كلمة <b>«ركبت»</b>.<br>
+      • لطلب سيارة خاصة بالتفاوض المباشر: اكتب <b>«مشوار من العياط لجامعة القاهرة بـ 250 جنيه»</b>.
       <div style="font-size:10px;color:#999;text-align:left;margin-top:4px;">الآن ✓✓</div>
     </div>
   </div>
@@ -1399,7 +1399,7 @@ async function sendSimMsg(ev) {
           data.replies.forEach(function(rep) {
             const botDiv = document.createElement('div');
             botDiv.style.cssText = 'align-self:flex-start;max-width:80%;background:#fff;color:#111;padding:10px 14px;border-radius:8px 8px 8px 0;box-shadow:0 1px 2px rgba(0,0,0,0.1);font-size:14px;line-height:1.5;';
-            botDiv.innerHTML = '<div style="font-size:11px;color:#075e54;font-weight:bold;margin-bottom:2px;">🤖 بوت منظومة العياط (' + (rep.chat_id.includes('@g.us') ? 'إشعار للجروب' : 'رسالة خاصة') + ')</div>' + 
+            botDiv.innerHTML = '<div style="font-size:11px;color:#075e54;font-weight:bold;margin-bottom:2px;">🤖 كابتن عز لخدمات النقل الذكي والمشاوير (' + (rep.chat_id.includes('@g.us') ? 'إشعار للجروب' : 'رسالة خاصة') + ')</div>' + 
               escHtml(rep.text).replace(/\\n/g, '<br>') + 
               '<div style="font-size:10px;color:#999;text-align:left;margin-top:4px;">الآن ✓✓</div>';
             box.appendChild(botDiv);

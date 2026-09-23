@@ -401,7 +401,7 @@ export async function getClientsDirectory(db: D1Database): Promise<any[]> {
            (SELECT COUNT(*) FROM shuttle_bookings b WHERE b.student_phone = c.phone) as shuttle_trips,
            (SELECT COUNT(*) FROM rides r WHERE r.client_phone = c.phone) as private_trips
     FROM clients c
-    ORDER BY c.trips_count DESC, c.id DESC
+    ORDER BY c.trips_count DESC, c.created_at DESC
   `).all<any>();
 
   return res.results || [];

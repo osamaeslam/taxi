@@ -210,6 +210,21 @@ export default {
         bookingDate: body.bookingDate,
         notes: body.notes,
       });
+
+      // إرسال رسالة التذكرة التلقائية إلى رقم واتساب العميل فوراً
+      if (bookRes.ok && bookRes.ticketCode) {
+        try {
+          let cleanPhone = String(body.studentPhone).replace(/[^0-9]/g, '');
+          if (cleanPhone.startsWith('01')) cleanPhone = '20' + cleanPhone.slice(1);
+          const chatId = `${cleanPhone}@s.whatsapp.net`;
+          const ticketUrl = `${url.origin}/ticket/${bookRes.ticketCode}`;
+          const waMsg = `🎫 مرحباً بك يا ${body.studentName}!\nتم تأكيد حجزك مع *كابتن عز لخدمات النقل الذكي والمشاوير* 🚕\n\n🔖 كود التذكرة: *${bookRes.ticketCode}*\n📍 نقطة الركوب: ${body.pickupLocation || 'العياط'}\n\n🔗 رابط تذكرتك الإلكترونية الذكية:\n${ticketUrl}\n\n(عند صعودك الباص، افتح الرابط واضغط "أنا ركبت الآن 🟢" أو أرسل كلمة "ركبت" هنا). رحلة موفقة! 🎓`;
+          await repo.queueOutbox(env.DB, chatId, waMsg, 'BOT');
+        } catch (e) {
+          console.warn('[Booking] Could not queue ticket outbox message:', e);
+        }
+      }
+
       return json(bookRes);
     }
 
