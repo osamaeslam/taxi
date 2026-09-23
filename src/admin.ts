@@ -831,11 +831,11 @@ function doGet(e) {
   } else if (page === 'chats') {
     const convs = await getConversations(env.DB, 30);
     title = 'المحادثات';
-    body = `<p class="page-desc">دردش مع الزبائن من هون مباشرة. رسالتك بتروح باسم الشركة فوراً. قبل ما تتدخل اكبس «إيقاف البوت» مشان ما يرد هو وياك سوا.</p>
+    body = `<p class="page-desc">دردش مع العملاء من هنا مباشرة. رسالتك بتتبعت باسم كابتن عز فوراً. تقدر تدوس «إيقاف البوت» عشان تتكلم بنفسك والعميل ما يوصلوش رد آلي.</p>
 <div class="box">
   <form onsubmit="return newChat(event)" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
     <label>📩 محادثة جديدة لرقم:</label>
-    <input id="newchat-phone" dir="ltr" placeholder="9639XXXXXXXX" style="width:170px">
+    <input id="newchat-phone" dir="ltr" placeholder="010XXXXXXXX" style="width:170px">
     <button class="small">فتح</button>
   </form>
 </div>
@@ -844,9 +844,9 @@ function doGet(e) {
     ${convs.length ? convs.map((c) => `
     <button class="conv" data-chat="${escHtml(c.chat_id)}" onclick="openChat('${escHtml(c.chat_id)}', this)">
       <span class="ph" dir="ltr">${escHtml(c.is_group ? 'مجموعة السواقين' : '+' + c.phone)}</span>
-      ${c.paused ? '<span class="badge-paused">⏸ بشر فقط</span>' : '<span class="badge-ai">بوت</span>'}
+      ${c.paused ? '<span class="badge-paused">⏸ بشري فقط</span>' : '<span class="badge-ai">بوت</span>'}
       <span class="prev">${escHtml((c.last_text ?? '').slice(0, 60))}</span>
-    </button>`).join('') : '<p class="muted" style="padding:12px">لا رسائل بعد — السجل بيظهر هون أول ما يوصل شي على رقم البوت.</p>'}
+    </button>`).join('') : '<p class="muted" style="padding:12px">ما فيش رسائل لسه — الرسائل والمحادثات هتظهر هنا أول ما يوصل أي حجز أو استفسار.</p>'}
   </div></div>
   <div class="thread-pane" id="thread-pane">
     <div class="thread-actions">
@@ -969,7 +969,7 @@ async function aiSummary() {
   if (!curChat) return;
   const box = document.getElementById('ai-summary');
   box.style.display = 'block';
-  box.textContent = '⏳ عم لخص…';
+  box.textContent = '⏳ جاري التلخيص بواسطة AI…';
   const j = await postApi('ai.summarize', { chat_id: curChat });
   box.textContent = j ? j.summary : 'فشل التلخيص.';
 }
@@ -989,7 +989,7 @@ setInterval(() => {
        JOIN zones tz ON tz.id = f.to_zone_id
        ORDER BY f.id`
     ).all();
-    title = 'الأسعار';
+    title = 'تسعير القرى والمناطق';
     const zoneOptions = (zones ?? [])
       .map((z: any) => `<option value="${z.id}">${escHtml(z.name)} (حزام ${z.belt})</option>`)
       .join('');
@@ -998,50 +998,82 @@ setInterval(() => {
     };
     const aliasesCell = (z: any): string => {
       const chips = aliasesOf(z).map((a: string, i: number) =>
-        `<span class="alias-chip">${escHtml(a)}<button title="حذف الاسم" onclick="delAlias(${z.id},${i})">×</button></span>`
+        `<span class="alias-chip">${escHtml(a)}<button title="مسح الاسم" onclick="delAlias(${z.id},${i})">×</button></span>`
       ).join('');
       return `${chips || '<span class="muted">—</span>'}
         <form class="alias-add" onsubmit="return addAlias(event, ${z.id}, this)">
-          <input name="alias" placeholder="+ اسم بديل" style="width:100px" maxlength="60">
+          <input name="alias" placeholder="+ اسم بديل / نطق تاني" style="width:120px" maxlength="60">
           <button class="small">+</button>
         </form>`;
     };
-    body = `<p class="page-desc">من هون بتحدد سعر الانتقال من أي مكان لأي مكان. السعر اليدوي بيفوق الحساب التلقائي دائماً.</p>
-<h2>💰 سعر انتقال من مكان لمكان</h2>
+    body = `
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+  <div>
+    <h2 style="margin:0 0 4px 0;">💰 تسعير القرى والأحزمة ومناطق المشاوير</h2>
+    <p class="page-desc" style="margin:0;">من هنا تقدر تضيف وتظبط أسعار المشاوير من أي قرية أو منطقة للتانية براحتك بالجنيه المصري. كل البيانات هنا بتكون من إدخالك وإدارتك بالكامل.</p>
+  </div>
+  ${(zones && zones.length > 0) || (fares && fares.length > 0) ? `
+  <button class="small danger" onclick="clearAllPricingData()" style="padding:8px 14px;font-weight:bold;">
+    🗑️ مسح كل البيانات والبدء من جديد
+  </button>` : ''}
+</div>
+
+${(!zones || zones.length === 0) ? `
+<div style="background:#ecfdf5;border:1px solid #6ee7b7;padding:16px 20px;border-radius:12px;margin-bottom:20px;display:flex;align-items:center;gap:12px;">
+  <span style="font-size:26px;">✨</span>
+  <div>
+    <b style="color:#065f46;display:block;font-size:15px;margin-bottom:2px;">تم مسح جميع البيانات القديمة بنجاح!</b>
+    <span style="color:#047857;font-size:13px;">الصفحة فاضية وجاهزة 100% عشان تبدأ تدخل قرى ومناطق العياط وأسعارها بإيدك من الفورم بالأسفل 👇</span>
+  </div>
+</div>` : ''}
+
+<h2>📍 1. إضافة القرى والمناطق</h2>
+<form class="bar" onsubmit="return addZone(event, this)">
+  <label>اسم القرية / المنطقة</label><input name="name" required placeholder="مثال: برنشت، المتانيا، العياط المحطة" style="width:200px">
+  <label>أسماء بديلة (افصل بفاصلة)</label><input name="aliases" placeholder="مثال: المحطة, الموقف, السكة" style="width:220px">
+  <label>الحزام الجغرافي</label>
+  <select name="belt">
+    <option value="1">حزام 1 — داخل العياط والمدينة</option>
+    <option value="2">حزام 2 — قرى قريبة ومداخل</option>
+    <option value="3">حزام 3 — قرى بعيدة وريف</option>
+  </select>
+  <button>➕ إضافة قرية / منطقة</button>
+</form>
+<table>
+<tr><th>#</th><th>اسم المنطقة أو القرية</th><th>أسماء بديلة يتعرف عليها السيستم</th><th>الحزام</th><th>إجراءات</th></tr>
+${(zones ?? []).map((z: any) => `<tr>
+  <td>${z.id}</td><td><b>${escHtml(z.name)}</b></td><td>${aliasesCell(z)}</td>
+  <td><span class="pill">${z.belt === 1 ? 'حزام 1 (مدينة)' : z.belt === 2 ? 'حزام 2 (ضواحي)' : 'حزام 3 (ريف)'}</span></td>
+  <td>
+    <button class="small" onclick="zoneBelt(${z.id},${z.belt >= 3 ? 1 : z.belt + 1})">تغيير الحزام ← ${z.belt >= 3 ? 1 : z.belt + 1}</button>
+    <button class="small danger" onclick="delZone(${z.id})">حذف</button>
+  </td>
+</tr>`).join('') || '<tr><td colspan="5" class="muted" style="text-align:center;padding:24px;">لسه ما ضفتش أي قرية أو منطقة — ضيف أول قرية أو منطقة من الفورم فوق 👆</td></tr>'}
+</table>
+
+<h2 style="margin-top:28px;">💰 2. تسعير المشوار الثابت (من قرية إلى قرية / مكان)</h2>
+${zones && zones.length >= 2 ? `
 <form class="bar" onsubmit="return addFare(event, this)">
   <label>من</label><select name="from_zone_id" required>${zoneOptions}</select>
   <label>إلى</label><select name="to_zone_id" required>${zoneOptions}</select>
-  <label>الأجرة (جنيه)</label><input name="price" type="number" min="0" required style="width:130px">
-  <label>ملاحظة</label><input name="note" placeholder="تعرفة معتمدة" style="width:140px">
-  <button>➕ حفظ السعر</button>
+  <label>السعر (جنيه مصري)</label><input name="price" type="number" min="0" placeholder="مثال: 50" required style="width:130px">
+  <label>ملاحظة اختيارية</label><input name="note" placeholder="مثال: تسعيرة رسمية معتمدة" style="width:160px">
+  <button>➕ حفظ التسعيرة</button>
 </form>
+` : `
+<div style="background:#f8fafc;border:1px dashed #cbd5e1;padding:14px;border-radius:10px;margin-bottom:16px;color:#64748b;font-size:13px;">
+  💡 لازم تضيف منطقتين أو قريتين على الأقل فوق عشان تقدر تحدد سعر المشوار المباشر بينهم.
+</div>
+`}
 <table>
-<tr><th>من</th><th>إلى</th><th>الأجرة</th><th>ملاحظة</th><th></th></tr>
+<tr><th>من</th><th>إلى</th><th>سعر المشوار (جنيه)</th><th>ملاحظة</th><th>إجراءات</th></tr>
 ${(fares ?? []).map((f: any) => `<tr>
-  <td>${escHtml(f.from_name)}</td><td>${escHtml(f.to_name)}</td><td>${formatEGP(f.price)}</td><td>${escHtml(f.note ?? '')}</td>
+  <td><b>${escHtml(f.from_name)}</b></td><td><b>${escHtml(f.to_name)}</b></td><td>${formatEGP(f.price)}</td><td>${escHtml(f.note ?? '')}</td>
   <td>
     <button class="small" onclick="editFare(${f.id}, ${f.price})">تعديل السعر</button>
     <button class="small danger" onclick="delFare(${f.id})">حذف</button>
   </td>
-</tr>`).join('') || '<tr><td colspan="5" class="muted">لا أسعار بعد — ضيف أول سعر من الفورم فوق.</td></tr>'}
-</table>
-<h2>📍 المناطق</h2>
-<form class="bar" onsubmit="return addZone(event, this)">
-  <label>اسم المنطقة</label><input name="name" required style="width:160px">
-  <label>أسماء بديلة (افصل بفاصلة)</label><input name="aliases" placeholder="عند المخيم, المخيم القديم" style="width:220px">
-  <label>الحزام</label>
-  <select name="belt"><option value="1">1 — مدينة</option><option value="2">2 — ضواحي</option><option value="3">3 — ريف</option></select>
-  <button>➕ إضافة منطقة</button>
-</form>
-<table>
-<tr><th>#</th><th>الاسم</th><th>أسماء بديلة</th><th>الحزام</th><th></th></tr>
-${(zones ?? []).map((z: any) => `<tr>
-  <td>${z.id}</td><td>${escHtml(z.name)}</td><td>${aliasesCell(z)}</td><td>حزام ${z.belt}</td>
-  <td>
-    <button class="small" onclick="zoneBelt(${z.id},${z.belt >= 3 ? 1 : z.belt + 1})">حزام ← ${z.belt >= 3 ? 1 : z.belt + 1}</button>
-    <button class="small danger" onclick="delZone(${z.id})">حذف</button>
-  </td>
-</tr>`).join('')}
+</tr>`).join('') || '<tr><td colspan="5" class="muted" style="text-align:center;padding:24px;">ما فيش أسعار مسجلة لسه — بمجرد إضافة قريتين هتقدر تثبت سعر المشوار بينهم.</td></tr>'}
 </table>`;
     pageJs = `
 function addFare(ev, f) {
@@ -1049,16 +1081,16 @@ function addFare(ev, f) {
   return api('fare.add', { from_zone_id: +f.from_zone_id.value, to_zone_id: +f.to_zone_id.value, price: +f.price.value, note: f.note.value });
 }
 function editFare(id, oldPrice) {
-  const p = prompt('السعر الجديد (ل.س):', oldPrice);
-  if (p) api('fare.edit', { id, price: +p });
+  const p = prompt('اكتب السعر الجديد بالجنيه المصري:', oldPrice);
+  if (p && !isNaN(+p)) api('fare.edit', { id, price: +p });
 }
-function delFare(id) { if (confirm('حذف هالسعر؟')) api('fare.del', { id }); }
+function delFare(id) { if (confirm('متأكد إنك عايز تحذف السعر ده؟')) api('fare.del', { id }); }
 function addZone(ev, f) {
   ev.preventDefault();
   return api('zone.add', { name: f.name.value, aliases: f.aliases.value.split(',').map(s => s.trim()).filter(Boolean), belt: +f.belt.value });
 }
 function zoneBelt(id, belt) { api('zone.belt', { id, belt }); }
-function delZone(id) { if (confirm('حذف هالمنطقة؟')) api('zone.del', { id }); }
+function delZone(id) { if (confirm('متأكد إنك عايز تحذف المنطقة دي؟')) api('zone.del', { id }); }
 function addAlias(ev, id, f) {
   ev.preventDefault();
   const v = f.alias.value.trim();
@@ -1066,6 +1098,11 @@ function addAlias(ev, id, f) {
   return false;
 }
 function delAlias(id, index) { api('zone.alias.del', { id, index }); }
+function clearAllPricingData() {
+  if (confirm('تحذير: هل أنت متأكد تماماً من مسح كل القرى والتسعيرات للبدء من الصفر؟')) {
+    api('pricing.clearAll', {});
+  }
+}
 `;
   } else if (page === 'drivers') {
     const { results: drivers } = await env.DB.prepare(
@@ -1585,9 +1622,9 @@ async function submitNewClient(e) {
   } else if (page === 'issues') {
     const issues = await listIssues(env.DB, 50);
     const newCount = issues.filter((i: { status: string }) => i.status === 'new').length;
-    title = 'المشاكل';
-    body = `<p class="page-desc">كشف المشرف الخلفي كل 30 دقيقة — الطلبات العالقة، الإرسال الفاشل، المحادثات المنقطعة وغيرها. <b>${newCount}</b> مشكلة جديدة.</p>
-<div class="box"><button onclick="runSupervisorNow()" class="small">🔍 فحص فوري هلق</button> <span id="sup-result" style="margin-inline-start:8px"></span></div>
+    title = 'المشاكل والمتابعة';
+    body = `<p class="page-desc">فحص آلي كل 30 دقيقة — الطلبات المعلقة، الإرسال الفاشل، أو أي انقطاع في الردود. عندك <b>${newCount}</b> ملاحظات جديدة.</p>
+<div class="box"><button onclick="runSupervisorNow()" class="small">🔍 فحص فوري دلوقتي</button> <span id="sup-result" style="margin-inline-start:8px"></span></div>
 <div class="box" style="padding:0;overflow-x:auto">
 <table>
   <tr><th>الوقت</th><th>النوع</th><th>الخطورة</th><th>التفاصيل</th><th>الحالة</th><th></th></tr>
@@ -1596,19 +1633,19 @@ async function submitNewClient(e) {
     <td>${escHtml(i.kind)}</td>
     <td>${i.severity === 'high' ? '🔴' : i.severity === 'med' ? '🟡' : '⚪'} ${escHtml(i.severity)}</td>
     <td style="max-width:420px">${escHtml(i.detail)}</td>
-    <td>${i.status === 'new' ? '<b style="color:var(--danger)">جديد</b>' : i.status === 'acked' ? 'مقروء' : '✅ منحل'}</td>
-    <td style="white-space:nowrap">${i.status !== 'fixed' ? `<button class="small" onclick="api('issue.ack', {id:${i.id}})">قرأته</button> <button class="small" onclick="api('issue.fix', {id:${i.id}})">انحل</button>` : ''}</td>
-  </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;padding:24px">ما في مشاكل مسجلة 🎉</td></tr>'}
+    <td>${i.status === 'new' ? '<b style="color:var(--danger)">جديد</b>' : i.status === 'acked' ? 'تمت الرؤية' : '✅ اتحلت'}</td>
+    <td style="white-space:nowrap">${i.status !== 'fixed' ? `<button class="small" onclick="api('issue.ack', {id:${i.id}})">شفتها</button> <button class="small" onclick="api('issue.fix', {id:${i.id}})">اتحلت</button>` : ''}</td>
+  </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;padding:24px">ما فيش أي مشاكل مسجلة الحمد لله 🎉</td></tr>'}
 </table>
 </div>`;
     pageJs = `
 async function runSupervisorNow() {
   const el = document.getElementById('sup-result');
-  el.textContent = '… عم يفحص';
+  el.textContent = '… جاري الفحص';
   try {
     const r = await fetch('/admin/api?key=' + encodeURIComponent(K), { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ action: 'supervisor.run' }) });
     const d = await r.json();
-    el.textContent = d.ok ? '✅ خلص الفحص — حدث الصفحة' : 'فشل: ' + (d.error || '');
+    el.textContent = d.ok ? '✅ اكتمل الفحص — جاري تحديث الصفحة' : 'فشل: ' + (d.error || '');
     if (d.ok) setTimeout(() => location.reload(), 800);
   } catch (e) { el.textContent = 'خطأ شبكة'; }
 }
@@ -1631,15 +1668,15 @@ async function runSupervisorNow() {
     const others = (settings ?? []).filter((s: any) => !known.has(s.key));
     body = `<p class="page-desc">مفاتيح التشغيل — غيّر واحفظ بزر واحد.</p>
 <form class="box" onsubmit="return saveSettings(event, this)">
-  ${boolRow('bot_enabled', '🤖 البوت', 'شغال = بيرد على الزبائن — مطفي = رسالة صيانة فقط')}
-  ${boolRow('ai_enabled', '🧠 مساعد AI للفهم', 'بيساعد البوت يفهم الرسائل المكتوبة بطرق مختلفة')}
-  ${boolRow('ai_chat', '💬 رد AI حر', 'عند رسالة ما فهمها البوت بيرد AI بالعامية — بدون أسعار أبداً')}
-  ${textRow('manager_phone', '👔 رقم المدير', 'الموافقات — طلبات السواقين الجدد توصله (صيغة دولية بدون +)')}
-  ${textRow('admin_phone', '🛠 رقم المهندس', 'المشاكل التقنية وتقارير المشرف توصله (صيغة دولية بدون +)')}
-  ${textRow('drivers_group_jid', '👥 مجموعة السواقين', 'بينحط تلقائياً — لا تغيرو إلا إذا نقلت المجموعة')}
+  ${boolRow('bot_enabled', '🤖 البوت', 'شغال = بيرد على العملاء — مطفي = رسالة صيانة فقط')}
+  ${boolRow('ai_enabled', '🧠 مساعد AI للفهم', 'بيساعد البوت يفهم رسائل وطلبات العملاء المختلفة')}
+  ${boolRow('ai_chat', '💬 رد AI حر', 'لو العميل بعت استفسار عام بيرد عليه بالعامية المصرية')}
+  ${textRow('manager_phone', '👔 رقم المدير', 'الموافقات — تنبيهات وطلبات السائقين الجدد توصله')}
+  ${textRow('admin_phone', '🛠 رقم الدعم الفني', 'المشاكل التقنية والتنبيهات الهامة توصله')}
+  ${textRow('drivers_group_jid', '👥 جروب السواقين', 'بيتحدد تلقائياً — ما تغيروش إلا لو غيرت الجروب')}
   <div class="set-row"><span class="lab">⏸ المحادثات الموقوفة</span>
     <span dir="ltr">${escHtml(sm['paused_chats'] ?? '[]')}</span>
-    <span class="hint">تُدار من صفحة المحادثات بزر إيقاف البوت — مو من هون</span></div>
+    <span class="hint">تُدار من صفحة المحادثات بزر إيقاف البوت — مش من هنا</span></div>
   ${others.map((s: any) => `<div class="set-row"><span class="lab">${escHtml(s.key)}</span>
     <input name="${escHtml(s.key)}" value="${escHtml(s.value)}" dir="ltr" style="width:260px"><span class="hint"></span></div>`).join('')}
   <div style="margin-top:12px"><button>💾 حفظ الإعدادات</button></div>
@@ -1808,7 +1845,7 @@ async function sendSimMsg(ev) {
     // whatsapp
     const gw = await gatewayStatus(env.ADMIN_KEY);
     title = 'ربط واتساب';
-    body = `<p class="page-desc">من هون بتربط رقم الشركة بالبوت — مرة وحدة وبس.</p>
+    body = `<p class="page-desc">من هنا تقدر تربط رقم واتساب الشغل بالبوت — مرة واحدة وخلاص.</p>
 ${whatsappTabHtml({
   connection: gw?.connection ?? 'closed',
   user: gw?.user ?? null,
@@ -1865,7 +1902,7 @@ export async function adminApi(request: Request, env: Env, action: string): Prom
         const chatId = String(body.chat_id ?? '');
         if (!chatId) return Response.json({ error: 'chat_id مطلوب' }, { status: 400 });
         const msgs = await getChatMessages(env.DB, chatId, 30);
-        if (!msgs.length) return Response.json({ summary: 'لا رسائل بهالمحادثة.' });
+        if (!msgs.length) return Response.json({ summary: 'ما فيش رسائل في المحادثة دي لسه.' });
         const transcript = msgs.map((m) =>
           m.direction === 'in' ? `العميل (+${m.sender_phone}): ${m.text}`
             : m.sender_phone === 'BOT' ? `البوت: ${m.text}` : `الموظف: ${m.text}`
@@ -1963,6 +2000,11 @@ export async function adminApi(request: Request, env: Env, action: string): Prom
         await env.DB.prepare(`DELETE FROM fixed_fares WHERE id = ?`).bind(Number(body.id)).run();
         return Response.json({ ok: true });
       }
+      case 'pricing.clearAll': {
+        await env.DB.prepare(`DELETE FROM fixed_fares`).run();
+        await env.DB.prepare(`DELETE FROM zones`).run();
+        return Response.json({ ok: true });
+      }
 
       // ─── إعدادات ───
       case 'settings.set': {
@@ -1979,7 +2021,7 @@ export async function adminApi(request: Request, env: Env, action: string): Prom
         const ride = await env.DB.prepare(`SELECT status FROM rides WHERE id = ?`).bind(Number(body.id)).first<{ status: string }>();
         if (!ride) return Response.json({ error: 'الرحلة غير موجودة' }, { status: 404 });
         if (!['NEW', 'DISPATCHING', 'ASSIGNED', 'ARRIVED', 'IN_RIDE'].includes(ride.status)) {
-          return Response.json({ error: 'الرحلة مقفلة — ما تنلغى' }, { status: 400 });
+          return Response.json({ error: 'الرحلة مقفلة — ما ينفعش تتلغي دلوقتي' }, { status: 400 });
         }
         await env.DB.prepare(`UPDATE rides SET status = 'CANCELLED' WHERE id = ?`).bind(Number(body.id)).run();
         return Response.json({ ok: true });
