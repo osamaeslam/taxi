@@ -1,0 +1,74 @@
+{
+  "id": "/captain-ezz",
+  "name": "كابتن عز — باصات الجامعات والمشاوير",
+  "short_name": "كابتن عز",
+  "description": "منظومة كابتن عز الذكية لنقل الجامعات والمشاوير الخاصة بالعياط والجيزة",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "portrait-primary",
+  "background_color": "#0e7c66",
+  "theme_color": "#0e7c66",
+  "lang": "ar",
+  "dir": "rtl",
+  "categories": [
+    "transportation",
+    "travel",
+    "utilities",
+    "education"
+  ],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "حجز تذكرة باص جديدة",
+      "short_name": "حجز باص",
+      "description": "حجز مقعد في باصات الجامعات من العياط",
+      "url": "/book",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "رادار الحضور والركوب الحي",
+      "short_name": "الحضور",
+      "description": "متابعة ركاب الباصات الحاضرين والمنتظرين",
+      "url": "/admin/attendance",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "كشوفات باصات الجامعات",
+      "short_name": "الباصات",
+      "description": "كشف رحلات وباصات 16 جامعة",
+      "url": "/admin/shuttle",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

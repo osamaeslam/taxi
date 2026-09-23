@@ -1,0 +1,1046 @@
+#!/usr/bin/env node
+/**
+ * بوابة واتساب (Baileys) — بوت تكسي واتساب
+ * whatsapp-taxi-dispatch gateway
+ *
+ * الوظيفة:
+ *  1) تستقبل رسائل واتساب (Baileys) وتدفعها للـ Worker على /webhook/whatsapp
+ *  2) تسحب الردود من /outbox/pending وترسلها وتؤكد /outbox/ack (فشل → /outbox/fail بعد 3 محاولات)
+ *  3) تدير الاقتران: QR أو كود اقتران — عبر HTTP API للوحة
+ *
+ * ⚠️ الجلسة محفوظة بـ ./session ولا تُمسح أبداً عند إعادة التشغيل أو التحديث.
+ *    المسح فقط عبر /pair/qr أو /pair/code أو /logout (طلب صريح من اللوحة).
+ *
+ * أمان الاقتران (بعد QA بوتس):
+ *  - عدّاد توليد (gen): أي سوكت قديم صار معزول — لا سوكتات موازية أبداً
+ *  - لا إعادة تسجيل تلقائية: 401/403/440 أو تجاوز المحاولات = توقف كامل (انتظار بشري)
+ *  - SIGTERM/SIGINT إغلاق نظيف، version fallback، معالجات uncaught/rejection
+ *
+ * التشغيل:
+ *   WORKER_URL=https://xxx.workers.dev ADMIN_KEY=... node gateway.mjs
+ */
+
+import { createRequire } from 'node:module';
+import { mkdirSync, cpSync, rmSync, existsSync, readdirSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
+import { pino } from 'pino';
+import QRCode from 'qrcode';
+import { transcribeVoice } from './asr.mjs';
+
+const require = createRequire(import.meta.url);
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  Browsers,
+  downloadMediaMessage,
+} = require('@whiskeysockets/baileys');
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ─── الإعدادات ───
+const WORKER_URL = process.env.WORKER_URL ?? 'https://whatsapp-taxi-dispatch.abdalganih2.workers.dev';
+const ADMIN_KEY = process.env.ADMIN_KEY ?? '';
+const AI_API_KEY = process.env.ZAI_API_KEY ?? process.env.AI_API_KEY ?? '';
+const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN ?? ADMIN_KEY; // لوحة ← بوابة
+const HTTP_PORT = Number(process.env.GATEWAY_PORT ?? 3010);
+const POLL_MS = Number(process.env.POLL_MS ?? 1500);
+const SESSION_DIR = process.env.SESSION_DIR ?? join(__dirname, 'session');
+const MAX_RECONNECT_ATTEMPTS = 4;
+const WORKER_TIMEOUT_MS = 10_000;
+const PAIR_WINDOW_MS = 5 * 60_000; // نافذة الاقتران: 5 دقائق فقط بضغطة زر ثم توقف تلقائي
+const BACKUP_DIR = process.env.BACKUP_DIR ?? join(__dirname, 'session-backups');
+const DATA_DIR = process.env.DATA_DIR ?? join(__dirname, 'data');
+const startedAt = Date.now();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const maskPhone = (p) => { const s = String(p ?? ''); return s.length > 6 ? `${s.slice(0, 4)}***${s.slice(-2)}` : '***'; };
+// 401 تسجيل خروج، 403 محظور، 411 multidevice mismatch، 440 استبدال، 500 جلسة تالفة
+const FATAL_CODES = new Set([DisconnectReason.loggedOut, 401, 403, 411, 440, 500]);
+// 408 qrTimeout، 428 إغلاق اتصال، 515 يحتاج إعادة مصافحة — لا تحتسب ضد المحاولات
+const NO_COUNT_CODES = new Set([408, 428, 515]);
+let startingPromise = null;   // single-flight: إقلاع واحد فقط بأي لحظة
+let pairWindowTimer = null;  // مؤقت نافذة الـ 5 دقائق
+let wantConnection = false;  // هل نريد اتصالاً حياً؟ false = مطفي بانتظار زر البدء
+
+if (!ADMIN_KEY) {
+  console.error('❌ ADMIN_KEY مطلوب');
+  process.exit(1);
+}
+
+mkdirSync(SESSION_DIR, { recursive: true });
+mkdirSync(DATA_DIR, { recursive: true });
+const log = pino({ level: process.env.LOG_LEVEL ?? 'info' });
+
+// ─── الـ Worker: استدعاء موحد بمهلة وإعادة محاولة (أُعيدت بعد حذفها بالخطأ في d3fb21b) ───
+async function worker(path, method = 'GET', body, { retries = 2 } = {}) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetch(`${WORKER_URL}${path}`, {
+        method,
+        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + ADMIN_KEY },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(WORKER_TIMEOUT_MS),
+      });
+      if (res.ok) return res.status === 204 ? null : await res.json().catch(() => null);
+      const txt = (await res.text().catch(() => '')).slice(0, 200);
+      const err = Object.assign(new Error(`worker ${method} ${path} → ${res.status} ${txt}`), { status: res.status });
+      if (res.status < 500 && res.status !== 408 && res.status !== 429) throw err; // دائم: لا تُعِد
+      lastErr = err;
+    } catch (e) {
+      if (e?.status && e.status < 500) throw e;
+      lastErr = e;
+    }
+    await sleep(300 * 2 ** i + Math.random() * 200);
+  }
+  throw lastErr;
+}
+
+// ─── حالة عملية عالمية ───
+let gen = 0;               // عدّاد التوليد: يعزل أي سوكت قديم فوراً
+let shuttingDown = false;
+let attempts = 0;          // محاولات إعادة الاتصال المتتالية
+let pairTimer = null;
+let reconnTimer = null;
+let sock = null;
+let server = null;
+
+// ─── LID mapping: الإرسال على الصيغة اللي عندها مفاتيح الجلسة ───
+const lidMap = new Map(); // phone -> xxxxx@lid
+const LIDMAP_FILE = join(DATA_DIR, 'lid-map.json');
+let lidMapSaveAt = 0;
+try {
+  const saved = JSON.parse(readFileSync(LIDMAP_FILE, 'utf8'));
+  for (const [pn, jid] of Object.entries(saved)) {
+    if (/^\d{8,15}$/.test(pn) && typeof jid === 'string') lidMap.set(pn, jid);
+  }
+  console.log(`📇 خريطة LID محمّلة من القرص: ${lidMap.size} رقم`);
+} catch { /* أول إقلاع — لا ملف بعد */ }
+function learnLid(pn, jid) {
+  if (!pn || !/^\d{8,15}$/.test(pn) || !jid) return;
+  if (lidMap.size > 5000) lidMap.delete(lidMap.keys().next().value);
+  lidMap.set(pn, jid);
+  // حفظ مخفّض (مرة كل 30s max) — الخريطة تبقى بعد إعادة التشغيل
+  if (Date.now() - lidMapSaveAt > 30_000) {
+    lidMapSaveAt = Date.now();
+    try { writeFileSync(LIDMAP_FILE, JSON.stringify(Object.fromEntries(lidMap))); }
+    catch (e) { log.warn({ err: String(e) }, 'lid-map save failed'); }
+  }
+}
+function resolveJid(chatId) {
+  const phone = chatId.split('@')[0];
+  return lidMap.get(phone) ?? chatId;
+}
+
+// ─── حالة البوابة (تُعرض على اللوحة) ───
+const state = {
+  connection: 'closed',   // closed | initializing | waiting_scan | connected | reconnecting (يبدأ مطفياً — الاقتران بزر فقط)
+  qr: null,
+  qrAt: null,
+  pairingCode: null,
+  pairingPhone: null,
+  pairingExpiresAt: null,
+  pairingRequested: false,
+  pairingUntil: null,     // نهاية نافذة الـ 5 دقائق
+  pairingMode: 'off',     // off | qr | code
+  sessionInvalid: false,
+  user: null,
+  lastError: 'الاقتران مطفي — اكبس زر البدء ليولد QR لمدة 5 دقائق',
+};
+
+// ─── إغلاق السوكت الحالي بعزل كامل لمستمعاته ───
+function killSock() {
+  clearTimeout(pairTimer);
+  pairTimer = null;
+  clearTimeout(reconnTimer);
+  reconnTimer = null;
+  try { sock?.ev.removeAllListeners(); } catch {}
+  try { sock?.end(new Error('replaced')); } catch {}
+  sock = null;
+  gen++;
+}
+
+// ─── أرشفة الجلسة قبل أي مسح (آخر 5 نسخ) — الجلسة لا تضيع أبداً ───
+function archiveSession(reason) {
+  try {
+    if (!existsSync(SESSION_DIR)) return null;
+    mkdirSync(BACKUP_DIR, { recursive: true });
+    const dst = join(BACKUP_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}-${reason}`);
+    cpSync(SESSION_DIR, dst, { recursive: true });
+    for (const d of readdirSync(BACKUP_DIR).sort().slice(0, -5)) {
+      rmSync(join(BACKUP_DIR, d), { recursive: true, force: true });
+    }
+    return dst;
+  } catch (e) {
+    log.error({ err: String(e) }, 'archive failed');
+    return null;
+  }
+}
+function freshSession(reason) {
+  const backup = archiveSession(reason);
+  rmSync(SESSION_DIR, { recursive: true, force: true });
+  mkdirSync(SESSION_DIR, { recursive: true });
+  if (backup) log.warn({ reason, backup }, 'session reset (archived)');
+}
+
+// ─── الاقتران عند الطلب: نافذة 5 دقائق بزر ثم توقف تلقائي (حماية حصة الرقم) ───
+function stopPairing(reason) {
+  clearTimeout(pairWindowTimer);
+  pairWindowTimer = null;
+  wantConnection = false;
+  const att = pairAttempt;
+  pairAttempt = null;
+  if (att?.fallbackTimer) { clearTimeout(att.fallbackTimer); att.fallbackTimer = null; }
+  killSock();
+  state.connection = 'closed';
+  state.user = null;
+  state.qr = null;
+  state.qrAt = null;
+  state.pairingCode = null;
+  state.pairingRequested = false;
+  state.pairingPhone = null;
+  state.pairingExpiresAt = null;
+  state.pairingUntil = null;
+  state.pairingMode = 'off';
+  // مصافحة ناقصة لا تُعاد استخدامها أبداً — أرشفة وعزل فوري (حكم Opus)
+  if (att && !att.handshakeComplete) quarantineSession('partial-pairing');
+  state.lastError = reason || 'توقف الاقتران — اكبس زر البدء عند الجاهزية';
+  console.log('⏹ اقتران متوقف:', state.lastError);
+}
+function startPairWindow(mode) {
+  clearTimeout(pairWindowTimer);
+  pairWindowTimer = null;
+  wantConnection = true;
+  state.pairingMode = mode;
+  state.pairingUntil = Date.now() + PAIR_WINDOW_MS;
+  state.lastError = null;
+  pairWindowTimer = setTimeout(() => {
+    stopPairing('انتهت مهلة 5 دقائق — اكبس زر الاقتران مجدداً');
+  }, PAIR_WINDOW_MS);
+  if (pairWindowTimer?.unref) pairWindowTimer.unref();
+}
+
+// ─── حكم Opus (تشخيص Invalid account signature): المصافحة تكتمل بالذاكرة فقط ───
+// registered=True يُكتب قبل التحقق من التوقيع — فهو ليس دليل نجاح. الدليل الحقيقي:
+// account.accountSignature + signalIdentities غير فارغة + me.id بصيغة رقم:جهاز
+function isReallyRegistered(c) {
+  return !!c?.registered && (
+    (typeof c?.me?.id === 'string' && c.me.id.length > 5) ||
+    (!!c?.account?.accountSignature && Array.isArray(c?.signalIdentities) && c.signalIdentities.length > 0)
+  );
+}
+// عزل جلسة ناقصة: أرشفة + تفريغ (لا حذف أبداً — كل شيء قابل للاسترجاع)
+function quarantineSession(reason) {
+  const backup = archiveSession(reason);
+  try { rmSync(SESSION_DIR, { recursive: true, force: true }); } catch {}
+  mkdirSync(SESSION_DIR, { recursive: true });
+  log.warn({ reason, backup }, 'half-paired session quarantined');
+}
+// عملية اقتران جارية (واحدة فقط بأي لحظة): مفاتيحها بالذاكرة حتى أول open ناجح
+let pairAttempt = null;
+
+// ─── الإقلاع: سوكت واحد دائماً — القديم معزول بـ gen ───
+// single-flight: نداءات متزامنة (pair + reconnect + watchdog) تشترك بنفس الإقلاع
+async function startWhatsApp(pairPhone = null, opts = {}) {
+  if (startingPromise) return startingPromise;
+  startingPromise = _startWhatsApp(pairPhone, opts).finally(() => { startingPromise = null; });
+  return startingPromise;
+}
+async function _startWhatsApp(pairPhone = null, opts = {}) {
+  killSock();               // killSock() نفسها تنفّذ gen++ في نهايتها
+  const myGen = gen;        // الجيل الحالي بعد الإلغاء (إصلاح P0-1: كان gen++ مزدوجاً يقتل كل إقلاع)
+  log.debug({ myGen }, 'generation acquired');
+
+  // إعادة أثناء مصافحة جارية (515/428): نفس كائن المصادقة من الذاكرة — نفس المفاتيح ونفس الكود، بلا مسح
+  let auth, saveCreds;
+  if (opts.reuse && pairAttempt && !pairAttempt.handshakeComplete && pairAttempt.auth) {
+    auth = pairAttempt.auth; saveCreds = pairAttempt.saveCreds;
+    pairAttempt.myGen = myGen;
+    log.info('reusing in-memory pairing auth (same keys, same code)');
+  } else {
+    ({ state: auth, saveCreds } = await useMultiFileAuthState(SESSION_DIR));
+    if (pairAttempt && !pairAttempt.handshakeComplete && !pairAttempt.auth) {
+      pairAttempt.auth = auth; pairAttempt.saveCreds = saveCreds; pairAttempt.myGen = myGen;
+    }
+  }
+  if (myGen !== gen || shuttingDown) { log.info({ myGen, gen }, 'superseded during auth load'); return; }
+
+  let version;
+  try {
+    ({ version } = await fetchLatestBaileysVersion());
+  } catch {
+    version = [2, 3000, 1023223821];  // fallback معروف — ما نوقف الخدمة بسبب شبكة
+  }
+  try {
+    const pkgVer = require('@whiskeysockets/baileys/package.json').version;
+    console.log(`📦 Baileys Package Version: ${pkgVer} | WA Protocol Version: ${JSON.stringify(version)}`);
+  } catch {}
+  if (myGen !== gen || shuttingDown) { log.info({ myGen, gen }, 'superseded during version fetch'); return; }
+
+  const retryMap = new Map();
+  const msgRetryCounterCache = {
+    get(key) { return retryMap.get(key); },
+    set(key, value) {
+      if (retryMap.size > 1000) retryMap.delete(retryMap.keys().next().value);
+      retryMap.set(key, value);
+    },
+    del(key) { retryMap.delete(key); },
+  };
+
+  sock = makeWASocket({
+    version,
+    auth: {
+      creds: auth.creds,
+      // حاسم: بدون Cacheable store المفاتيح تتلف أثناء المصافحة → Invalid account signature
+      keys: makeCacheableSignalKeyStore(auth.keys, log.child({ module: 'signal-keys' })),
+    },
+    msgRetryCounterCache,
+    printQRInTerminal: false,
+    logger: log.child({ module: 'baileys' }),
+    markOnlineOnConnect: false,
+    qrTimeout: 180_000,   // 3 دقائق — 60s كانت تقتل السوكت والمستخدم لسا عم يكتب الكود (حكم Opus)
+    defaultQueryTimeoutMs: 60_000,
+    syncFullHistory: false,
+    shouldSyncHistoryMessage: () => false,
+    getMessage: async (key) => sentStore.get(key.id)?.message,
+    browser: Browsers ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '20.0.04'],
+  });
+  const s = sock; // نسخة محلية: أي مؤقت لاحق يستخدم سوكته هو، مش العالمي
+
+  // تشخيص فوري للرسائل الخام من سيرفر واتساب مباشرة (CB:message)
+  try {
+    s.ws?.on?.('CB:message', (node) => {
+      console.log('\n================== [DIAGNOSTIC] RAW CB:MESSAGE ==================');
+      console.log('Timestamp:', new Date().toISOString(), '| Tag:', node?.tag);
+      console.log('Attrs:', JSON.stringify(node?.attrs || {}));
+      console.dir(node, { depth: 8 });
+      console.log('=================================================================\n');
+    });
+  } catch {}
+
+  // تشخيص أحداث المزامنة والتحديثات الرسمية من Baileys
+  s.ev.on('messaging-history.set', (data) => {
+    console.log('\n================== [DIAGNOSTIC] HISTORY SET ==================');
+    console.log('[HISTORY SET]', {
+      chats: data.chats?.length,
+      contacts: data.contacts?.length,
+      messages: data.messages?.length,
+      syncType: data.syncType,
+      isLatest: data.isLatest,
+    });
+    console.log('==============================================================\n');
+  });
+
+  s.ev.on('messages.update', (updates) => {
+    console.log('\n[DIAGNOSTIC] [MESSAGES UPDATE] Count:', updates?.length);
+  });
+
+  s.ev.on('messages.reaction', (reactions) => {
+    console.log('\n[DIAGNOSTIC] [MESSAGES REACTION] Count:', reactions?.length);
+  });
+
+  // كتابة القرص: بعد أول open فقط — أثناء المصافحة الذاكرة فقط (registered=True يُكتب قبل التحقق!)
+  s.ev.on('creds.update', async () => {
+    if (myGen !== gen) return;   // جيل قديم — لا يلمس القرص أبداً
+    const att = pairAttempt && pairAttempt.myGen === myGen && !pairAttempt.handshakeComplete ? pairAttempt : null;
+    if (att) {
+      // أول إشارة أن الموبايل سلّم كوداً: تغيّر advSecretKey → المصافحة جارية، المسح مقفل من هنا
+      try {
+        const cur = att.auth.creds.advSecretKey ? String(att.auth.creds.advSecretKey) : null;
+        if (att.code && !att.submitted && att.advAtIssue && cur && cur !== att.advAtIssue) {
+          att.submitted = true;
+          log.info('phone submitted code — handshake in flight, wiping locked');
+        }
+      } catch {}
+      return; // ذاكرة فقط — لا كتابة قرص أثناء المصافحة
+    }
+    try { await saveCreds(); } catch (e) { log.warn({ err: String(e).slice(0, 120) }, 'saveCreds failed'); }
+  });
+
+  // احتياط: إذا لم يصل أي qr خلال 12s (شبكة بطيئة) — طلقة الكود الوحيدة عبر المؤقت
+  if (pairAttempt && pairAttempt.myGen === myGen && pairAttempt.mode === 'code' && !pairAttempt.codeRequested) {
+    pairAttempt.fallbackTimer = setTimeout(() => {
+      const a = pairAttempt;
+      if (a && a.myGen === gen && !a.handshakeComplete && !a.codeRequested && !shuttingDown && sock) {
+        a.codeRequested = true;
+        requestOneCode(sock, a);
+      }
+    }, 12_000);
+    if (pairAttempt.fallbackTimer?.unref) pairAttempt.fallbackTimer.unref();
+  }
+
+// طلب الكود: طلقة واحدة فقط لكل عملية — أي إعادة تولّد مفاتيح جديدة وتقتل الكود الحي (حكم Opus)
+async function requestOneCode(s, att) {
+  if (att.myGen !== gen || shuttingDown) return;
+  try {
+    const code = await s.requestPairingCode(att.phone);
+    if (att.myGen !== gen) return;
+    att.code = code;
+    att.codeIssuedAt = Date.now();
+    try { att.advAtIssue = att.auth.creds.advSecretKey ? String(att.auth.creds.advSecretKey) : null; } catch { att.advAtIssue = null; }
+    state.pairingCode = code;
+    state.pairingExpiresAt = Date.now() + 120_000;
+    state.pairingRequested = true;
+    state.connection = 'waiting_scan';
+    log.info({ phone: maskPhone(att.phone), code, gen: att.myGen }, 'pairing code issued (single shot — enter within 60s)');
+  } catch (e) {
+    if (att.myGen !== gen) return;
+    log.warn({ err: String(e).slice(0, 200) }, 'pairing code request failed — attempt dead, quarantine');
+    stopPairing('فشل طلب الكود من واتساب — اكبس زر البدء من جديد لمرة نضيفة');
+  }
+}
+
+  s.ev.on('connection.update', async (u) => {
+    if (myGen !== gen) return;   // سوكت قديم — تجاهل كامل
+    const { connection, lastDisconnect, qr } = u;
+    state.lastActivityAt = Date.now();
+
+    // طلقة الكود الوحيدة: على أول qr (يثبت اكتمال المصافحة الضجيجية وقبول السيرفر) — بلا إعادة أبداً
+    {
+      const att = pairAttempt && pairAttempt.myGen === myGen && !pairAttempt.handshakeComplete ? pairAttempt : null;
+      if (att && att.mode === 'code' && !att.codeRequested && qr) {
+        att.codeRequested = true;
+        requestOneCode(s, att);
+      }
+    }
+
+    if (qr && !pairPhone) {
+      // خارج النافذة أو بلا رغبة اتصال → تجاهل (حماية حصة الرقم)
+      if (!wantConnection) return;
+      if (state.pairingMode !== 'off' && state.pairingUntil && Date.now() > state.pairingUntil) return;
+      state.connection = 'waiting_scan';
+      QRCode.toDataURL(qr, { margin: 1, width: 320 })
+        .then((dataUrl) => {
+          if (myGen !== gen) return;
+          state.qr = dataUrl;
+          state.qrAt = Date.now();
+          console.log('📱 QR جديد جاهز —', new Date().toLocaleTimeString('ar-SY'));
+        })
+        .catch((e) => { state.lastError = `qr render: ${e}`; });
+    }
+
+    if (connection === 'open') {
+      attempts = 0;
+      clearTimeout(pairWindowTimer);
+      pairWindowTimer = null;
+      if (pairAttempt && pairAttempt.myGen === myGen) pairAttempt.handshakeComplete = true;
+      if (pairAttempt?.fallbackTimer) { clearTimeout(pairAttempt.fallbackTimer); pairAttempt.fallbackTimer = null; }
+      // أول كتابة قرص — بعد اكتمال المصافحة فقط (كل ما قبلها كان ذاكرة)
+      try { await saveCreds(); } catch (e) { log.warn({ err: String(e).slice(0, 120) }, 'saveCreds on open failed'); }
+      pairAttempt = null;
+      state.pairingUntil = null;
+      state.pairingMode = 'off';
+      state.connection = 'connected';
+      state.qr = null;
+      state.pairingCode = null;
+      state.pairingPhone = null;
+      state.pairingExpiresAt = null;
+      state.pairingRequested = false;
+      state.sessionInvalid = false;
+      state.lastError = null;
+      state.user = s.user?.id ?? null;
+      console.log('✅ واتساب متصل:', state.user);
+      try {
+        await s.sendPresenceUpdate('available');
+        console.log('📡 تم إرسال إشعار التواجد (presence: available) لسيرفرات واتساب لتنشيط استلام الرسائل الحية');
+      } catch (e) {
+        log.warn({ err: String(e) }, 'sendPresenceUpdate failed');
+      }
+    }
+    // لا تطمس waiting_scan أثناء انتظار المسح/الكود
+    if (connection === 'connecting' && state.connection !== 'waiting_scan') state.connection = 'connecting';
+
+    if (connection === 'close') {
+      state.user = null;
+      const code = lastDisconnect?.error?.output?.statusCode;
+      // انتهت نافذة الـ 5 دقائق أثناء الاقتران → توقف نهائي بلا إعادة
+      if (state.pairingMode !== 'off' && state.pairingUntil && Date.now() > state.pairingUntil) {
+        stopPairing('انتهت مهلة 5 دقائق — اكبس زر الاقتران مجدداً');
+        return;
+      }
+      // مطفي بانتظار زر البدء → لا إعادة اتصال أبداً
+      if (!wantConnection) {
+        state.connection = 'closed';
+        return;
+      }
+      // مصافحة اقتران جارية: أي إعادة تستخدم نفس مفاتيح الذاكرة — نفس الكود، بلا مسح أبداً (حكم Opus)
+      {
+        const att = pairAttempt && pairAttempt.myGen === myGen && !pairAttempt.handshakeComplete ? pairAttempt : null;
+        if (att) {
+          if (FATAL_CODES.has(code)) {
+            pairAttempt = null;
+            quarantineSession('pair-fatal-' + code);
+            wantConnection = false;
+            state.connection = 'closed';
+            state.sessionInvalid = [401, 411, 500].includes(code);
+            state.lastError = 'فشلت المصافحة (code=' + code + ') — الجلسة الجزئية عُزلت، اكبس زر البدء لمرة نضيفة';
+            console.log('🛑 مصافحة فاشلة (code=' + code + ') — عزل + انتظار بشري');
+            return;
+          }
+          if (!NO_COUNT_CODES.has(code)) attempts++;
+          if (attempts > MAX_RECONNECT_ATTEMPTS) {
+            pairAttempt = null;
+            quarantineSession('pair-attempts-cap');
+            wantConnection = false;
+            state.connection = 'closed';
+            state.lastError = 'تجاوز سقف المحاولات أثناء المصافحة — عُزلت الجلسة، اكبس زر البدء لاحقاً';
+            console.log('🛑 سقف محاولات المصافحة — عزل + انتظار بشري');
+            return;
+          }
+          state.connection = 'reconnecting';
+          const delay = code === 515 ? 250 : Math.min(60_000, 2000 * 2 ** attempts) + Math.floor(Math.random() * 1000);
+          console.log('⚠️ انقطاع أثناء المصافحة (code=' + code + ') — إعادة بنفس المفاتيح بعد ' + (delay / 1000) + 's');
+          reconnTimer = setTimeout(() => {
+            if (pairAttempt === att && !att.handshakeComplete && !shuttingDown) {
+              startWhatsApp(att.phone, { reuse: true }).catch((e) => { state.lastError = String(e); });
+            }
+          }, delay);
+          return;
+        }
+      }
+      state.lastError = `disconnect code=${code}`;
+      if (FATAL_CODES.has(code)) {
+        // لا إعادة تلقائية ولا مسح تلقائي — اقتران جديد قرار بشري من اللوحة (حماية الحد اليومي)
+        wantConnection = false;
+        state.connection = 'closed';
+        state.sessionInvalid = [401, 411, 500].includes(code);
+        console.log(`🛑 توقف (code=${code}, attempts=${attempts}) — اقتران جديد من اللوحة فقط`);
+        return;
+      }
+      if (!NO_COUNT_CODES.has(code)) attempts++;
+      if (attempts > MAX_RECONNECT_ATTEMPTS) {
+        wantConnection = false;
+        state.connection = 'closed';
+        console.log(`🛑 توقف (code=${code}, attempts=${attempts}) — تجاوز السقف، اقتران جديد من اللوحة فقط`);
+        return;
+      }
+      state.connection = 'reconnecting';
+      const delay = code === 515 ? 250 : Math.min(60_000, 2000 * 2 ** attempts) + Math.floor(Math.random() * 1000);
+      console.log(`⚠️ انقطع (code=${code}) — إعادة محاولة بعد ${delay / 1000}s (محاولة ${attempts}/${MAX_RECONNECT_ATTEMPTS})`);
+      reconnTimer = setTimeout(() => {
+        if (myGen === gen && !shuttingDown) {
+          startWhatsApp(pairPhone).catch((e) => { state.lastError = String(e); });
+        }
+      }, delay);
+    }
+  });
+
+  s.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (myGen !== gen) return;
+
+    console.log('\n================== [DIAGNOSTIC] MESSAGES UPSERT ==================');
+    console.log('[UPSERT]', { type, count: messages?.length, ids: messages?.map(m => m.key?.id) });
+    console.log('TIMESTAMP:', new Date().toISOString());
+    console.log('UPDATE TYPE:', type, '| MESSAGES COUNT:', messages?.length);
+    for (const m of messages || []) {
+      console.log('MESSAGE SUMMARY:', {
+        id: m.key?.id,
+        remoteJid: m.key?.remoteJid,
+        fromMe: m.key?.fromMe,
+        participant: m.key?.participant,
+        senderPn: m.key?.senderPn,
+        stubType: m.messageStubType,
+        hasMessageContent: !!m.message,
+      });
+      if (m.message) {
+        console.log('MESSAGE STRUCTURE:');
+        console.dir(m.message, { depth: 4 });
+      }
+    }
+    console.log('==================================================================\n');
+
+    state.lastActivityAt = Date.now();
+    for (const m of messages || []) {
+      const msgId = m.key?.id;
+      if (!m.message) {
+        console.log(`[FILTER] ⏭️ تجاوز: لا يوجد محتوى رسالة (stubType=${m.messageStubType}) ID: ${msgId}`);
+        continue;
+      }
+      if (m.key.fromMe) {
+        console.log(`[FILTER] ⏭️ تجاوز: الرسالة صادرة من البوت نفسه (fromMe=true) ID: ${msgId}`);
+        continue;
+      }
+      const chatId = m.key.remoteJid;
+      if (!chatId || chatId === 'status@broadcast') {
+        console.log(`[FILTER] ⏭️ تجاوز: حالة واتساب أو chatId فارغ (${chatId}) ID: ${msgId}`);
+        continue;
+      }
+
+      // حساب التوقيت بدقة (يتعامل مع أرقام protobuf أو كائنات Long)
+      const rawTs = m.messageTimestamp;
+      const tsSec = typeof rawTs === 'object' && rawTs !== null ? Number(rawTs.low ?? rawTs) : Number(rawTs || 0);
+      // رسائل أقدم من بدء العملية بـ 5 دقائق — أرشيف متأخر، تجاهل
+      if (tsSec && tsSec * 1000 < startedAt - 5 * 60_000) {
+        console.log(`[FILTER] ⏭️ تجاوز: رسالة قديمة من أرشيف سابق (ts=${tsSec}, startedAt=${Math.floor(startedAt/1000)}) ID: ${msgId}`);
+        continue;
+      }
+
+      // فك الطبقات: عادي/مؤقت/عرض-مرة/أزرار/قوائم
+      const c =
+        m.message.ephemeralMessage?.message ??
+        m.message.viewOnceMessageV2?.message ??
+        m.message.viewOnceMessage?.message ??
+        m.message;
+      let text =
+        c.conversation ??
+        c.extendedTextMessage?.text ??
+        c.imageMessage?.caption ??
+        c.buttonsResponseMessage?.selectedDisplayText ??
+        c.listResponseMessage?.title ??
+        c.templateButtonReplyMessage?.selectedId ??
+        c.interactiveResponseMessage?.body?.text ??
+        '';
+
+      // ─── رسالة صوتية؟ تحويلها لنص عبر GLM-ASR (فوق API KEY للـ AI) ───
+      let voiceNote = false;
+      if (!text.trim() && c.audioMessage && AI_API_KEY) {
+        voiceNote = true;
+        try {
+          const buffer = await downloadMediaMessage(m, 'buffer', {});
+          const mimetype = c.audioMessage.mimetype ?? 'audio/ogg; codecs=opus';
+          const t0 = Date.now();
+          const heard = await transcribeVoice({ buffer, mimetype, apiKey: AI_API_KEY });
+          console.log(`🎙️ [ASR] ${maskPhone(chatId)} — ${Date.now() - t0}ms — "${heard ?? '(فشل التحويل)'}"`);
+          if (heard) {
+            // النص المحوَّل يعامل كرسالة نصية عادية
+            Object.assign(c, { conversation: heard });
+            text = heard;
+          } else {
+            console.log(`🎙️ [ASR] فشل تحويل الصوت — تجاهل (ID: ${msgId})`);
+          }
+        } catch (e) {
+          log.warn({ err: String(e).slice(0, 120) }, 'voice transcribe failed');
+        }
+      }
+
+      console.log(`[INCOMING MSG] 📩 نص الرسالة: "${text}" | من Chat: ${chatId} | النوع: ${type}${voiceNote ? ' | 🎙️ صوتية' : ''}`);
+
+      if (!text.trim()) {
+        console.log(`[FILTER] ⏭️ تجاوز: رسالة بدون نص قابل للمعالجة ID: ${msgId}`);
+        continue;
+      }
+
+      // dedupe: علّم كمقروء فقط بعد نجاح الـ webhook (الفاشل يُعاد عبر spool)
+      if (!msgId || seenHas(msgId)) {
+        console.log(`[FILTER] ⏭️ تجاوز: رسالة معالجة مسبقاً (duplicate) ID: ${msgId}`);
+        continue;
+      }
+
+      // المرسل: بالمجموعات participant، وبالخاص remoteJid
+      // ملاحظة LID: الرقم الحقيقي يأتي بـ senderPn فقط. بدونه لا نثق بالرقم —
+      // نرسل الهوية كما هي مع phoneResolved=false والـ Worker يوثق ويصمت بدل اتهام بريء.
+      const senderJid = m.key.participant ?? chatId;
+      let senderPhone = senderJid.split('@')[0].split(':')[0];
+      let senderLid = null;
+      let phoneResolved = true;
+      if (senderJid.endsWith('@lid')) {
+        senderLid = senderJid;
+        if (m.key.senderPn) {
+          senderPhone = String(m.key.senderPn).split('@')[0].split(':')[0];
+        } else {
+          console.log(`[LID LOOKUP] فحص خريطة LID للرقم: ${senderJid}`);
+          for (const [pn, l] of lidMap.entries()) {
+            if (l === senderJid) { senderPhone = pn; break; }
+          }
+          if (senderPhone === senderJid.split('@')[0].split(':')[0]) phoneResolved = false;
+        }
+      }
+      if (!/^\d{7,15}$/.test(senderPhone)) {
+        log.warn({ senderPhone, senderJid }, 'sender phone invalid — skip');
+        continue;
+      }
+
+      // تعلّم LID: فقط بهوية موثوقة (senderPn أو خريطة) — ممنوع تسميم الخريطة برقم LID نفسه
+      if (phoneResolved) {
+        if (chatId.endsWith('@lid')) learnLid(m.key.senderPn?.split('@')[0] ?? senderPhone, chatId);
+        if (senderJid.endsWith('@lid')) learnLid(senderPhone, senderJid);
+        if (m.key.senderLid) {
+          const lid = String(m.key.senderLid).includes('@') ? String(m.key.senderLid) : `${m.key.senderLid}@lid`;
+          learnLid(senderPhone, lid);
+        }
+      }
+
+      console.log(`🚀 [WEBHOOK DISPATCH] دفع إلى Worker: phone=${senderPhone}, resolved=${phoneResolved}, text="${text}", msgId=${msgId}`);
+
+      try {
+        const payload = { msgId, ts: tsSec, chatId, senderPhone, senderLid, phoneResolved, text, isGroup: chatId.endsWith('@g.us') };
+        await worker('/webhook/whatsapp', 'POST', payload);
+        seenAdd(msgId);
+        console.log(`✅ [WEBHOOK SUCCESS] تم الاستلام والرد بنجاح من Worker للرسالة: ${msgId}`);
+      } catch (e) {
+        log.error({ err: String(e).slice(0, 160), msgId }, 'webhook failed -> spooled');
+        spoolPush({ msgId, ts: tsSec, chatId, senderPhone, senderLid, phoneResolved, text, isGroup: chatId.endsWith('@g.us') });
+      }
+    }
+  });
+}
+
+// ─── قائمة انتظار على القرص للرسائل التي فشل دفعها (تُفرغ كل 30s) ───
+const SPOOL = join(DATA_DIR, 'inbound-spool.ndjson');
+function spoolPush(p) {
+  try { appendFileSync(SPOOL, `${JSON.stringify(p)}\n`); }
+  catch (e) { log.error({ err: String(e) }, 'spool write failed'); }
+}
+async function spoolDrain() {
+  if (!existsSync(SPOOL)) return;
+  let lines;
+  try { lines = readFileSync(SPOOL, 'utf8').split('\n').filter(Boolean); }
+  catch { return; }
+  if (!lines.length) return;
+  writeFileSync(SPOOL, '');
+  for (const line of lines) {
+    let p;
+    try { p = JSON.parse(line); } catch { continue; }
+    if (!p?.msgId || seenHas(p.msgId)) continue;
+    try { await worker('/webhook/whatsapp', 'POST', p); seenAdd(p.msgId); }
+    catch { spoolPush(p); }
+  }
+}
+setInterval(() => {
+  if (!shuttingDown && state.connection === 'connected') spoolDrain().catch(() => {});
+}, 30_000).unref();
+
+// dedupe الرسائل الواردة: TTL + سقف (FIFO للأقدم — لا clear() يهدم النافذة)
+const SEEN_TTL = 10 * 60_000;
+const SEEN_MAX = 5000;
+const seenIds = new Map(); // id -> timestamp
+function seenHas(id) {
+  const t = seenIds.get(id);
+  if (!t) return false;
+  if (Date.now() - t > SEEN_TTL) { seenIds.delete(id); return false; }
+  return true;
+}
+function seenAdd(id) {
+  seenIds.set(id, Date.now());
+  while (seenIds.size > SEEN_MAX) seenIds.delete(seenIds.keys().next().value);
+}
+
+// رسائل أرسلتها (لـ getMessage عند retry receipt)
+const sentStore = new Map();
+
+// ─── حلقة الإرسال: outbox → واتساب (مع عدّاد فشل حقيقي بـ Map) ───
+const failCounts = new Map();
+
+async function outboxLoop() {
+  for (;;) {
+    if (shuttingDown) return;
+    try {
+      if (sock && state.connection === 'connected') {
+        const { messages } = await worker('/outbox/pending');
+        if (messages?.length) {
+          const sent = [];
+          const failed = [];
+          for (const m of messages) {
+            if (shuttingDown) break;
+            // انقطع الاتصال أثناء الدفعة؟ أكّد المُرسل واقف — الباقي يُسحب لاحقاً
+            if (!sock || state.connection !== 'connected') break;
+
+            // ─── أوامر خاصة للبوابة (من الـ Worker عبر outbox) ───
+            // cmd://group-add/<phone> — إضافة سائق لمجموعة السواقين تلقائياً بعد الموافقة
+            if (String(m.chat_id).startsWith('cmd://group-add/')) {
+              const phone = String(m.chat_id).split('cmd://group-add/')[1]?.replace(/\D/g, '');
+              // النص الجاي من الـ Worker = "<groupJid>|<phone>" — البوابة ما إلها وصول للـ D1
+              const groupJid = (String(m.text).split('|')[0] || '').trim();
+              try {
+                if (!phone || !groupJid) throw new Error('phone or group missing');
+                const res = await sock.groupParticipantsUpdate(groupJid, [`${phone}@s.whatsapp.net`], 'add');
+                log.info({ phone: maskPhone(phone), res: JSON.stringify(res).slice(0, 120) }, 'group-add ok');
+                sent.push(m.id);
+              } catch (e) {
+                const s = String(e);
+                // رقم ماسك الخصوصية أو ما بنضيف مباشرة → fall back لرابط الدعوة (الـ Worker بيبعته)
+                log.warn({ phone: maskPhone(phone), err: s.slice(0, 140) }, 'group-add failed (invite fallback?)');
+                sent.push(m.id); // ما منعتبره فشل — الرابط البديل بيتبعت من الـ Worker
+              }
+              continue;
+            }
+
+            try {
+              const resp = await sock.sendMessage(resolveJid(m.chat_id), { text: m.text });
+              if (!resp?.key?.id) throw new Error(`no message id returned (resp=${JSON.stringify(resp).slice(0, 120)})`);
+              sent.push(m.id);
+              failCounts.delete(m.id);
+              sentStore.set(resp.key.id, resp);
+              if (sentStore.size > 400) sentStore.delete(sentStore.keys().next().value);
+              log.info({ id: m.id, waId: resp.key.id, to: maskPhone(String(m.chat_id).split('@')[0]) }, 'sent ok');
+            } catch (e) {
+              log.error({ err: String(e).slice(0, 160), id: m.id }, 'send failed');
+              const n = (failCounts.get(m.id) ?? 0) + 1;
+              failCounts.set(m.id, n);
+              while (failCounts.size > 500) failCounts.delete(failCounts.keys().next().value);
+              if (n >= 3) {
+                failCounts.delete(m.id);
+                failed.push(m.id);
+              }
+            }
+            // فاصل عشوائي بين الرسائل — لا burst يستفز الحظر
+            await new Promise((r) => setTimeout(r, 400 + Math.random() * 400));
+          }
+          if (sent.length) await worker('/outbox/ack', 'POST', { ids: sent }).catch(() => {});
+          if (failed.length) {
+            // بلّغ الـ Worker بالفشل النهائي (3 محاولات) — وإن فشل البلاغ، ack حتى لا تعيد للأبد
+            await worker('/outbox/fail', 'POST', { ids: failed, error: '3 attempts failed' })
+              .catch(() => worker('/outbox/ack', 'POST', { ids: failed }).catch(() => {}));
+          }
+        }
+      }
+    } catch (e) {
+      log.warn({ err: String(e) }, 'outbox poll failed');
+    }
+    await new Promise((r) => setTimeout(r, POLL_MS));
+  }
+}
+
+// ─── HTTP API للوحة الإدارة ───
+function timingSafeEq(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+function checkToken(req, url) {
+  const t = req.headers['x-gateway-token'] || url.searchParams.get('token') || '';
+  return GATEWAY_TOKEN.length >= 16 && timingSafeEq(t, GATEWAY_TOKEN);
+}
+
+// قراءة جسم آمن: حد حجم + JSON بلا انهيار
+function readBody(req, max = 8192) {
+  return new Promise((ok, no) => {
+    let d = '';
+    req.on('data', (c) => {
+      d += c;
+      if (d.length > max) { req.destroy(); no(new Error('body too large')); }
+    });
+    req.on('end', () => {
+      try { ok(JSON.parse(d || '{}')); } catch { no(new Error('bad json')); }
+    });
+    req.on('error', no);
+  });
+}
+
+server = createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  res.setHeader('content-type', 'application/json');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (!checkToken(req, url)) {
+    res.writeHead(401); res.end(JSON.stringify({ error: 'unauthorized' })); return;
+  }
+
+  try {
+    // قائمة المجموعات — يتطلب اتصال حي
+    if (url.pathname === '/groups' && req.method === 'GET') {
+      if (!sock || state.connection !== 'connected') {
+        res.writeHead(409); res.end(JSON.stringify({ error: 'offline' })); return;
+      }
+      const groups = await sock.groupFetchAllParticipating();
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        groups: Object.entries(groups).map(([jid, g]) => ({ jid, name: g.subject, size: g.participants?.length ?? 0 })),
+      }));
+      return;
+    }
+
+    // حالة الاتصال + QR الحالي
+    if (url.pathname === '/status') {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        connection: state.connection,
+        user: state.user,
+        qr: state.qr,
+        qrAgeSec: state.qrAt ? Math.floor((Date.now() - state.qrAt) / 1000) : null,
+        pairingCode: state.pairingCode,
+        pairingPhone: state.pairingPhone ? maskPhone(state.pairingPhone) : null,
+        pairingExpiresInSec: state.pairingExpiresAt ? Math.max(0, Math.floor((state.pairingExpiresAt - Date.now()) / 1000)) : null,
+        pairingRequested: state.pairingRequested,
+        pairingMode: state.pairingMode,
+        pairingWindowSec: state.pairingUntil ? Math.max(0, Math.floor((state.pairingUntil - Date.now()) / 1000)) : null,
+        sessionInvalid: state.sessionInvalid,
+        attempts,
+        lastError: state.lastError,
+      }));
+      return;
+    }
+
+    // إيقاف التوليد يدوياً — زر الإطفاء باللوحة (آمن دائماً)
+    if (url.pathname === '/pair/stop' && req.method === 'POST') {
+      stopPairing('توقف الاقتران يدوياً — اكبس زر البدء عند الجاهزية');
+      res.writeHead(200); res.end(JSON.stringify({ ok: true, stopped: true }));
+      return;
+    }
+
+    // استئناف جلسة محفوظة (زر آمن): بلا مسح، بلا كود، بلا QR — إعادة اتصال بالمفاتيح الموجودة فقط.
+    // للاستخدام بعد إعادة التشغيل عندما تكون الجلسة على القرص لكن الإقلاع التلقائي لم يعمل.
+    // الفشل يتوقف بهدوء بلا مسح وبلا اقتران — القرار يبقى بشرياً من اللوحة.
+    if (url.pathname === '/resume' && req.method === 'POST') {
+      if (state.connection === 'connected') {
+        res.writeHead(409); res.end(JSON.stringify({ error: 'متصل حالياً — لا حاجة للاستئناف' })); return;
+      }
+      const RBUSY = ['initializing', 'connecting', 'reconnecting', 'waiting_scan'];
+      if (RBUSY.includes(state.connection)) {
+        res.writeHead(409); res.end(JSON.stringify({ error: 'عملية جارية — انتظر النتيجة' })); return;
+      }
+      if (pairAttempt && !pairAttempt.handshakeComplete && !pairAttempt.dead) {
+        res.writeHead(409); res.end(JSON.stringify({ error: 'اقتران جارٍ — لا تلمس، انتظر النتيجة' })); return;
+      }
+      let cur = null;
+      try { cur = JSON.parse(readFileSync(join(SESSION_DIR, 'creds.json'), 'utf8')); } catch {}
+      if (!cur || !cur.me?.id) {
+        res.writeHead(400); res.end(JSON.stringify({ error: 'لا توجد جلسة محفوظة — الاقتران الجديد قرار بشري من اللوحة' })); return;
+      }
+      wantConnection = true; state.lastError = null; attempts = 0;
+      state.connection = 'connecting';
+      startWhatsApp().catch((e) => { state.lastError = String(e); });
+      res.writeHead(200); res.end(JSON.stringify({ ok: true, resume: true }));
+      return;
+    }
+
+    // اقتران جديد: زر بدء → نافذة 5 دقائق ثم توقف تلقائي (حماية حصة الرقم)
+    // مرفوض أثناء اتصال حي — قرار قطع أولاً. إعادة الضغط أثناء النافذة تحتاج force:true
+    if ((url.pathname === '/pair/qr' || url.pathname === '/pair/code') && req.method === 'POST') {
+      let body = null;
+      if (url.pathname === '/pair/code') {
+        body = await readBody(req).catch(() => null);
+        if (!body) { res.writeHead(400); res.end(JSON.stringify({ error: 'bad request' })); return; }
+        // تحقق من الرقم أولاً — قبل أي مسح للجلسة (رقم غلط كان يمسح الجلسة!)
+        const _phone = String(body.phone ?? '').replace(/[^0-9]/g, '').replace(/^00/, '');
+        if (!/^[1-9]\d{7,14}$/.test(_phone)) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'رقم غير صالح — لازم دولي بدون + مثال: 9639XXXXXXXX' }));
+          return;
+        }
+      }
+      if (state.connection === 'connected') {
+        res.writeHead(409);
+        res.end(JSON.stringify({ error: 'متصل حالياً — اعمل /logout أولاً إذا بدك اقتران جديد' }));
+        return;
+      }
+      const BUSY = ['initializing', 'connecting', 'reconnecting', 'waiting_scan'];
+      if (BUSY.includes(state.connection) && body?.force !== true) {
+        res.writeHead(409);
+        res.end(JSON.stringify({ error: 'اقتران جارٍ — انتظر النتيجة أو أعد المحاولة مع force:true', windowSec: state.pairingUntil ? Math.max(0, Math.floor((state.pairingUntil - Date.now()) / 1000)) : null }));
+        return;
+      }
+      // idempotent: كود حي لنفس الرقم → نفس الكود بلا مسح ولا سوكت جديد (الكبسة التانية آمنة — حكم Opus)
+      if (url.pathname === '/pair/code') {
+        const _p = String(body.phone ?? '').replace(/[^0-9]/g, '').replace(/^00/, '');
+        const live = pairAttempt && !pairAttempt.handshakeComplete && !pairAttempt.dead &&
+          pairAttempt.mode === 'code' && pairAttempt.phone === _p && pairAttempt.code &&
+          Date.now() < pairAttempt.codeIssuedAt + 120_000;
+        if (live) {
+          res.writeHead(200);
+          res.end(JSON.stringify({ ok: true, mode: 'code', reused: true, windowSec: state.pairingUntil ? Math.max(0, Math.floor((state.pairingUntil - Date.now()) / 1000)) : null }));
+          return;
+        }
+        if (pairAttempt && !pairAttempt.handshakeComplete && !pairAttempt.dead && pairAttempt.submitted) {
+          res.writeHead(409);
+          res.end(JSON.stringify({ error: 'المصافحة جارية مع واتساب — لا تمسح الآن، انتظر النتيجة' }));
+          return;
+        }
+      }
+      killSock();  // عزل كامل للسوكت القديم + مستمعاته
+      freshSession(url.pathname === '/pair/qr' ? 'pair-qr' : 'pair-code');  // أرشفة قبل المسح — الجلسة لا تضيع
+      state.qr = null; state.pairingCode = null; state.pairingRequested = false;
+      state.pairingPhone = null; state.pairingExpiresAt = null; state.sessionInvalid = false;
+      state.connection = 'initializing';
+      attempts = 0;
+      // عملية اقتران واحدة: مفاتيحها بالذاكرة حتى أول open — أي ضغطة ثانية أثناء حياتها تُرد بنفس الكود
+      pairAttempt = {
+        phone: url.pathname === '/pair/code' ? String(body.phone ?? '').replace(/[^0-9]/g, '').replace(/^00/, '') : null,
+        mode: url.pathname === '/pair/qr' ? 'qr' : 'code',
+        auth: null, saveCreds: null, code: null, codeIssuedAt: 0, advAtIssue: null,
+        handshakeComplete: false, codeRequested: false, submitted: false, dead: false,
+        startedAt: Date.now(), fallbackTimer: null, myGen: -1,
+      };
+
+      if (url.pathname === '/pair/qr') {
+        startPairWindow('qr');
+        state.lastError = null;
+        state.pairingRequested = true;
+        startWhatsApp().catch((e) => { state.lastError = String(e); });
+        res.writeHead(200); res.end(JSON.stringify({ ok: true, mode: 'qr', windowSec: Math.floor(PAIR_WINDOW_MS / 1000) }));
+        return;
+      }
+      // /pair/code — الرقم تحقق مسبقاً قبل أي مسح
+      const phone = pairAttempt.phone;
+      startPairWindow('code');
+      state.lastError = null;
+      state.pairingPhone = phone;
+      state.pairingRequested = true;
+      startWhatsApp(phone).catch((e) => { state.lastError = String(e); });
+      res.writeHead(200); res.end(JSON.stringify({ ok: true, mode: 'code', phone: maskPhone(phone), windowSec: Math.floor(PAIR_WINDOW_MS / 1000) }));
+      return;
+    }
+
+    // قطع الاتصال
+    if (url.pathname === '/logout' && req.method === 'POST') {
+      try { await Promise.race([sock?.logout?.(), sleep(5000)]); } catch {}
+      clearTimeout(pairWindowTimer);
+      pairWindowTimer = null;
+      wantConnection = false;
+      killSock();
+      freshSession('logout');
+      state.connection = 'closed'; state.user = null;
+      state.qr = null; state.pairingCode = null; state.pairingRequested = false;
+      state.pairingPhone = null; state.pairingExpiresAt = null; state.sessionInvalid = false;
+      state.pairingUntil = null; state.pairingMode = 'off';
+      state.lastError = 'تم قطع الاتصال — اكبس زر البدء عند الجاهزية';
+      res.writeHead(200); res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    res.writeHead(404); res.end(JSON.stringify({ error: 'not found' }));
+  } catch (e) {
+    log.error({ err: String(e) }, 'http handler');
+    res.writeHead(500); res.end(JSON.stringify({ error: 'internal' }));
+  }
+});
+
+server.listen(HTTP_PORT, '127.0.0.1', () => {
+  console.log(`🚕 بوابة تكسي — HTTP: http://127.0.0.1:${HTTP_PORT}`);
+});
+
+console.log(`🚕 بوابة تكسي واتساب → ${WORKER_URL}`);
+console.log(`📂 الجلسة: ${SESSION_DIR}`);
+
+// ─── معالجات انهيار عالمية: لا restart loop بسبب استثناء نسي ───
+process.on('unhandledRejection', (e) => log.error({ err: String(e) }, 'unhandledRejection'));
+process.on('uncaughtException', (e) => log.error({ err: String(e) }, 'uncaughtException'));
+
+// ─── إغلاق نظيف: لا فساد creds.json عند systemctl stop ───
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    wantConnection = false;
+    clearTimeout(pairWindowTimer);
+    gen++;
+    try { sock?.end(new Error('shutdown')); } catch {}
+    try { server?.close(); } catch {}
+    setTimeout(() => process.exit(0), 1500).unref();
+  });
+}
+
+// الإقلاع: جلسة مكتملة فعلاً → إعادة اتصال. جلسة ناقصة (registered بلا مصافحة) → عزل فوري. لا جلسة → انتظار الزر.
+// بلا await مجرّد — أي فشل يُسجل ويُعاد بهدوء (لا exit → لا restart loop)
+{
+  let _bootCreds = null;
+  try { _bootCreds = JSON.parse(readFileSync(join(SESSION_DIR, 'creds.json'), 'utf8')); } catch {}
+  if (_bootCreds?.registered) {
+    wantConnection = true;
+    state.lastError = null;
+    console.log('📂 جلسة مسجلة موجودة — إعادة اتصال تلقائية وحفظ الجلسة');
+    startWhatsApp().catch((e) => {
+      state.lastError = String(e);
+      log.error({ err: String(e) }, 'startup failed');
+    });
+  } else {
+    console.log('⏸ لا جلسة مسجلة — بانتظار زر البدء من اللوحة (5 دقائق لكل ضغطة)');
+  }
+}
+outboxLoop();

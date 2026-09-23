@@ -1,0 +1,6 @@
+{
+  "name": "WhatsApp Taxi Dispatch",
+  "description": "منظومة كابتن عز الذكية لنقل الجامعات والمشاوير بالعياط وقراها، التذاكر الذكية، رادار الحضور والركوب المباشر (أخضر/أحمر)، وتصدير شيتات Excel",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
