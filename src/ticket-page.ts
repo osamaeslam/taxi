@@ -1012,3 +1012,255 @@ function shareRideTicket() {
 </html>`;
 }
 
+export function renderDriverAttendanceHtml(
+  vehicle: any | null,
+  allVehicles: any[],
+  bookings: any[],
+  targetDate: string,
+  hostUrl: string
+): string {
+  const vName = vehicle?.vehicle_name || 'باص كابتن عز';
+  const driverName = vehicle?.driver_name || 'الكابتن';
+  const driverPhone = vehicle?.driver_phone || '';
+  const plate = vehicle?.plate_number || '';
+  const lineName = vehicle?.line_name || 'خط الجامعة';
+  const departure = vehicle?.departure_time || '06:15 ص';
+  const capacity = vehicle?.seat_capacity || 14;
+
+  const total = bookings.length;
+  const boarded = bookings.filter((b) => b.boarded === 1).length;
+  const waiting = total - boarded;
+
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>كشف ركاب ${escHtml(driverName)} — كابتن عز</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0e7c66">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <style>
+    :root {
+      --primary: #0e7c66;
+      --primary-dark: #095344;
+      --accent: #f59e0b;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --green: #10b981;
+      --green-bg: #ecfdf5;
+      --red: #ef4444;
+      --red-bg: #fef2f2;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Cairo', sans-serif; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--ink); padding: 12px; padding-bottom: 70px; min-height: 100vh; }
+    .container { max-width: 520px; margin: 0 auto; }
+    
+    .top-header { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; border-radius: 16px; padding: 16px 18px; margin-bottom: 14px; box-shadow: 0 4px 15px rgba(14,124,102,0.2); }
+    .top-title { font-size: 18px; font-weight: 800; display: flex; justify-content: space-between; align-items: center; }
+    .sub-info { font-size: 13px; opacity: 0.9; margin-top: 6px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .tag { background: rgba(255,255,255,0.2); padding: 2px 8px; border-radius: 6px; font-size: 12px; }
+
+    .bus-selector { margin-bottom: 14px; background: #fff; border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 14px; display: flex; align-items: center; gap: 10px; }
+    .bus-selector select { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); font-size: 14px; font-weight: bold; color: var(--ink); outline: none; background: #f8fafc; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+    .stat-card { background: #fff; border-radius: 12px; padding: 10px; text-align: center; border: 1px solid var(--line); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .stat-card .num { font-size: 22px; font-weight: 900; }
+    .stat-card .lbl { font-size: 11px; color: var(--muted); font-weight: 600; margin-top: 2px; }
+    .stat-green { border-top: 3px solid var(--green); background: var(--green-bg); }
+    .stat-green .num { color: #065f46; }
+    .stat-red { border-top: 3px solid var(--red); background: var(--red-bg); }
+    .stat-red .num { color: #991b1b; }
+    .stat-all { border-top: 3px solid var(--primary); }
+
+    .search-box { margin-bottom: 12px; }
+    .search-input { width: 100%; padding: 10px 14px; border-radius: 10px; border: 1.5px solid var(--line); font-size: 14px; outline: none; background: #fff; }
+    .search-input:focus { border-color: var(--primary); }
+
+    .card { background: #fff; border-radius: 14px; padding: 14px; margin-bottom: 10px; border: 1.5px solid var(--line); box-shadow: 0 2px 6px rgba(0,0,0,0.03); position: relative; transition: all 0.2s; }
+    .card.is-boarded { border-color: #6ee7b7; background: #f0fdf4; }
+    .card.is-waiting { border-color: #fca5a5; background: #fff; }
+
+    .card-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+    .p-name { font-size: 16px; font-weight: 800; color: var(--ink); display: flex; align-items: center; gap: 6px; }
+    .p-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 700; }
+    .badge-round { background: #e0e7ff; color: #3730a3; }
+    .badge-sub { background: #dbeafe; color: #1e40af; }
+    .badge-cash { background: #fef3c7; color: #92400e; }
+
+    .p-detail { font-size: 13px; color: var(--muted); margin-bottom: 10px; display: flex; flex-direction: column; gap: 3px; }
+    .p-loc { font-weight: 700; color: #047857; }
+
+    .action-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    .btn-board { flex: 1; padding: 10px; border-radius: 8px; font-size: 14px; font-weight: 800; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: 0.15s; }
+    .btn-not-boarded { background: #10b981; color: #fff; box-shadow: 0 2px 6px rgba(16,185,129,0.3); }
+    .btn-not-boarded:active { transform: scale(0.97); }
+    .btn-boarded-tag { background: #dcfce7; color: #166534; border: 1.5px solid #86efac; font-weight: 800; }
+
+    .btn-icon { width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; text-decoration: none; font-size: 18px; border: 1px solid var(--line); background: #fff; }
+    .btn-icon.wa { color: #10b981; border-color: #a7f3d0; background: #ecfdf5; }
+    .btn-icon.tel { color: #0284c7; border-color: #bae6fd; background: #f0f9ff; }
+
+    .bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--line); padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; z-index: 100; }
+    .live-dot { width: 9px; height: 9px; border-radius: 50%; background: #10b981; display: inline-block; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div class="top-header">
+    <div class="top-title">
+      <span>كابتن: ${escHtml(driverName)}</span>
+      <span class="tag" style="background:#fbbf24;color:#78350f;font-weight:900;">🚌 ${escHtml(vName)}</span>
+    </div>
+    <div class="sub-info">
+      <span>🎓 ${escHtml(lineName)}</span>
+      <span>⏰ التحرك: ${escHtml(departure)}</span>
+      ${plate ? `<span>🔢 ${escHtml(plate)}</span>` : ''}
+    </div>
+  </div>
+
+  ${allVehicles && allVehicles.length > 1 ? `
+  <div class="bus-selector">
+    <label style="font-size:13px;font-weight:bold;">تبديل الباص:</label>
+    <select onchange="location.href='/attendance?vehicle_id=' + this.value">
+      ${allVehicles.map((v: any) => `<option value="${v.id}" ${vehicle && vehicle.id === v.id ? 'selected' : ''}>${v.vehicle_name} — كابتن ${v.driver_name} (${v.line_name})</option>`).join('')}
+    </select>
+  </div>` : ''}
+
+  <div class="stats-grid">
+    <div class="stat-card stat-all">
+      <div class="num">${total}</div>
+      <div class="lbl">ركاب الباص</div>
+    </div>
+    <div class="stat-card stat-green">
+      <div class="num" id="boardedCount">${boarded}</div>
+      <div class="lbl">ركبوا الباص 🟢</div>
+    </div>
+    <div class="stat-card stat-red">
+      <div class="num" id="waitingCount">${waiting}</div>
+      <div class="lbl">بالانتظار 🔴</div>
+    </div>
+  </div>
+
+  <div class="search-box">
+    <input type="search" class="search-input" id="searchFilter" placeholder="🔍 بحث باسم الطالب أو نقطة الركوب..." oninput="filterCards(this.value)">
+  </div>
+
+  <div id="cardsList">
+    ${bookings.map((b: any, idx: number) => {
+      const isB = b.boarded === 1;
+      const cleanPhone = String(b.student_phone).replace(/[^0-9]/g, '');
+      const waLink = `https://wa.me/2${cleanPhone}?text=${encodeURIComponent('أهلاً بك يا ' + b.student_name + '، كابتن الباص في طريقه لنقطة الركوب (' + (b.pickup_location || 'العياط') + ')')}`;
+      const telLink = `tel:${cleanPhone}`;
+      const ticket = b.ticket_code || ('EZZ-' + (1000 + b.id));
+
+      return `
+      <div class="card ${isB ? 'is-boarded' : 'is-waiting'}" id="card-${b.id}" data-name="${escHtml(b.student_name)}" data-loc="${escHtml(b.pickup_location || '')}">
+        <div class="card-head">
+          <div class="p-name">
+            <span>${idx + 1}. ${escHtml(b.student_name)}</span>
+            <span style="font-size:12px;">${b.gender === 'بنات' ? '🌸' : '⚡'}</span>
+          </div>
+          <span class="p-badge ${b.direction === 'round' ? 'badge-round' : 'badge-sub'}">
+            ${b.direction === 'round' ? 'ذهاب وعودة 🔄' : (b.direction === 'one_way_go' ? 'ذهاب فقط' : 'عودة فقط')}
+          </span>
+        </div>
+
+        <div class="p-detail">
+          <div>📍 نقطة الركوب: <span class="p-loc">${escHtml(b.pickup_location || 'موقف العياط')}</span></div>
+          <div>🎫 التذكرة: <span style="font-family:monospace;font-weight:bold;">${escHtml(ticket)}</span> | المقعد: <b>#${b.id % capacity + 1}</b></div>
+          <div>💰 الدفع: <b>${b.payment_method === 'subscription' ? 'اشتراك شهري ✅' : (b.paid_status === 'paid' ? 'مدفوع كاش 💵' : 'كاش بالباص 💵')}</b></div>
+        </div>
+
+        <div class="action-row">
+          ${isB ? `
+            <div class="btn-board btn-boarded-tag" id="status-${b.id}">
+              ✅ ركب الباص ${b.boarded_at ? '(' + escHtml(b.boarded_at) + ')' : ''}
+            </div>
+          ` : `
+            <button class="btn-board btn-not-boarded" id="btn-${b.id}" onclick="markBoarded(${b.id}, '${escHtml(ticket)}')">
+              🟢 تأكيد الركوب الآن
+            </button>
+          `}
+          <a href="${waLink}" target="_blank" class="btn-icon wa" title="مراسلة واتساب">💬</a>
+          <a href="${telLink}" class="btn-icon tel" title="اتصال تليفوني">📞</a>
+        </div>
+      </div>`;
+    }).join('') || '<div style="text-align:center;padding:40px;background:#fff;border-radius:12px;border:1px dashed var(--line);color:var(--muted);">لا يوجد ركاب محجوزين لهذا الباص اليوم حتى الآن.</div>'}
+  </div>
+</div>
+
+<div class="bottom-bar">
+  <div style="display:flex;align-items:center;gap:6px;font-weight:700;">
+    <span class="live-dot"></span>
+    <span>رادار الحضور اللحظي — كابتن عز</span>
+  </div>
+  <button onclick="location.reload()" style="background:#f1f5f9;border:1px solid var(--line);padding:5px 12px;border-radius:6px;font-weight:bold;cursor:pointer;">
+    🔄 تحديث
+  </button>
+</div>
+
+<script>
+async function markBoarded(id, code) {
+  const btn = document.getElementById('btn-' + id);
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = '⏳ جاري التسجيل...';
+  }
+  try {
+    const res = await fetch('/api/board', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: code })
+    });
+    const d = await res.json();
+    if (d.ok) {
+      const card = document.getElementById('card-' + id);
+      if (card) {
+        card.className = 'card is-boarded';
+        btn.outerHTML = '<div class="btn-board btn-boarded-tag">✅ ركب الباص (' + (d.time || 'الآن') + ')</div>';
+      }
+      const bEl = document.getElementById('boardedCount');
+      const wEl = document.getElementById('waitingCount');
+      if (bEl && wEl) {
+        bEl.innerText = Number(bEl.innerText) + 1;
+        wEl.innerText = Math.max(0, Number(wEl.innerText) - 1);
+      }
+    } else {
+      alert(d.error || 'فشل التسجيل');
+      if (btn) { btn.disabled = false; btn.innerText = '🟢 تأكيد الركوب الآن'; }
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+    if (btn) { btn.disabled = false; btn.innerText = '🟢 تأكيد الركوب الآن'; }
+  }
+}
+
+function filterCards(query) {
+  const q = query.trim().toLowerCase();
+  const cards = document.querySelectorAll('#cardsList .card');
+  cards.forEach(c => {
+    const name = (c.getAttribute('data-name') || '').toLowerCase();
+    const loc = (c.getAttribute('data-loc') || '').toLowerCase();
+    if (!q || name.includes(q) || loc.includes(q)) {
+      c.style.display = 'block';
+    } else {
+      c.style.display = 'none';
+    }
+  });
+}
+</script>
+
+</body>
+</html>`;
+}
+

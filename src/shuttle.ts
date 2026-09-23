@@ -466,7 +466,7 @@ export async function bookPrivateRide(
 
   const res = await db.prepare(`
     INSERT INTO rides (client_phone, client_name, from_text, to_text, price, client_offered_price, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'NEW', datetime('now'))
+    VALUES (?, ?, ?, ?, ?, ?, 'DISPATCHING', datetime('now'))
   `).bind(
     cleanPhone,
     data.clientName.trim(),

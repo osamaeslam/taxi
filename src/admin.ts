@@ -1294,7 +1294,8 @@ ${vehicles.map((v: any) => `<tr>
   <td>${v.seat_capacity} راكب</td>
   <td><span class="st ${v.booked_seats >= v.seat_capacity ? 'IN_RIDE' : 'ASSIGNED'}">${v.booked_seats || 0} من ${v.seat_capacity}</span></td>
   <td>
-    <button class="small" onclick="viewManifest(${v.id}, '${escHtml(v.vehicle_name)}')">📋 عرض كشف الركاب</button>
+    <button class="small" onclick="viewManifest(${v.id}, '${escHtml(v.vehicle_name)}')">📋 كشف الطباعة</button>
+    <a href="/attendance?vehicle_id=${v.id}" target="_blank" class="small" style="background:#10b981;color:#fff;text-decoration:none;padding:5px 9px;border-radius:6px;font-weight:bold;margin-inline-start:4px;display:inline-block;">📱 رادار السائق</a>
   </td>
 </tr>`).join('')}
 </table>
@@ -1356,6 +1357,9 @@ async function viewManifest(vehicleId, vName) {
 
     const hostUrl = url ? `${url.protocol}//${url.host}` : '';
     const sheetsFormula = `=IMPORTDATA("${hostUrl}/api/export/csv?date=${targetDate}")`;
+    const currentVehicle = vehicles.find((v: any) => v.id === vehicleFilter);
+    const driverDirectUrl = vehicleFilter ? `${hostUrl}/attendance?vehicle_id=${vehicleFilter}&date=${targetDate}` : '';
+    const driverWaText = currentVehicle ? encodeURIComponent(`يا مرحب كابتن ${currentVehicle.driver_name} 🚕\nده رابط كشف حضور وركاب باصك (${currentVehicle.vehicle_name}) لليوم:\n${driverDirectUrl}\nافتحه من موبايلك واضغط «تأكيد الركوب 🟢» أمام كل طالب يركب معاك. بالتوفيق!`) : '';
 
     title = 'رادار الحضور والركوب الحي — شيت السائق والإدارة';
     body = `<p class="page-desc">متابعة لحظية ومباشرة لحضور ركاب باصات العياط والجامعات. الركاب الذين أكدوا ركوبهم عبر الواتساب أو التذكرة ينورون <b style="color:#10b981;">بالأخضر 🟢</b>، ومن هم بالانتظار <b style="color:#ef4444;">بالأحمر 🔴</b>.</p>
@@ -1365,6 +1369,29 @@ async function viewManifest(vehicleId, vName) {
   <div class="stat" style="border-top: 4px solid #10b981; background: #ecfdf5;"><div class="n" style="color:#065f46;">${boardedSeats}</div>🟢 ركبوا الباص (حاضرين)</div>
   <div class="stat" style="border-top: 4px solid #ef4444; background: #fef2f2;"><div class="n" style="color:#991b1b;">${waitingSeats}</div>🔴 في الانتظار (لم يركبوا)</div>
   <div class="stat" style="border-top: 4px solid #3b82f6;"><div class="n">${totalCapacity}</div>إجمالي السعة المتاحة (${vehicles.length} باص)</div>
+</div>
+
+<div class="box" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px;background:#f0fdf4;padding:12px 16px;border-radius:12px;border:1.5px solid #10b981;">
+  <div style="font-weight:bold;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <span>🚌 تخصيص باص / سائق معين:</span>
+    <select id="vehicleSelector" onchange="changeVehicle(this.value)" style="padding:8px 12px;border-radius:8px;border:1.5px solid #10b981;font-size:14px;font-weight:bold;background:#fff;cursor:pointer;">
+      <option value="">-- 🚌 عرض كل الباصات والخطوط معاً --</option>
+      ${vehicles.map((v: any) => `<option value="${v.id}" ${vehicleFilter === v.id ? 'selected' : ''}>${escHtml(v.vehicle_name)} — كابتن ${escHtml(v.driver_name)} (${escHtml(v.line_name || 'جامعة')})</option>`).join('')}
+    </select>
+  </div>
+  ${vehicleFilter ? `
+    <button onclick="copyDriverLink('${escHtml(driverDirectUrl)}')" class="btn" style="background:#0e7c66;color:#fff;border:0;padding:8px 14px;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+      🔗 نسخ رابط الموبايل لهذا السائق
+    </button>
+    <a href="https://wa.me/2${escHtml(String(currentVehicle?.driver_phone || '').replace(/[^0-9]/g, ''))}?text=${driverWaText}" target="_blank" class="btn" style="background:#10b981;color:#fff;text-decoration:none;padding:8px 14px;border-radius:8px;font-weight:bold;font-size:13px;display:inline-flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(16,185,129,0.3);">
+      💬 إرسال الرابط للسائق واتساب
+    </a>
+    <a href="${escHtml(driverDirectUrl)}" target="_blank" style="font-size:13px;font-weight:bold;color:#0e7c66;text-decoration:underline;">
+      📱 فتح شاشة السائق للمعاينة
+    </a>
+  ` : `
+    <span style="font-size:13px;color:#065f46;font-weight:600;">💡 اختر باصاً محدداً لنسخ أو إرسال رابطه الخاص للسائق ليرى ركابه فقط دون باقي الباصات!</span>
+  `}
 </div>
 
 <div class="box" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px;background:var(--card);padding:14px;border-radius:12px;border:1px solid var(--line);">
@@ -1509,6 +1536,24 @@ function changeDate(d) {
   const u = new URL(location.href);
   u.searchParams.set('date', d);
   location.href = u.toString();
+}
+
+function changeVehicle(vId) {
+  const u = new URL(location.href);
+  if (vId) {
+    u.searchParams.set('vehicle_id', vId);
+  } else {
+    u.searchParams.delete('vehicle_id');
+  }
+  location.href = u.toString();
+}
+
+function copyDriverLink(url) {
+  navigator.clipboard.writeText(url).then(() => {
+    alert('✅ تم نسخ رابط كشف السائق إلى الحافظة!\\n\\nيمكنك إرساله للكابتن الآن على الواتساب:\\n' + url);
+  }).catch(() => {
+    prompt('انسخ رابط السائق التالي:', url);
+  });
 }
 
 async function toggleBoard(bookingId, targetState) {

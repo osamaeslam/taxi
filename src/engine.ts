@@ -249,11 +249,15 @@ export async function handleMessage(env: Env, msg: InboundMessage): Promise<Outb
       text: clientMsg,
     });
 
-    // Broadcast to drivers
-    let driverNotice = `📢 *طلب مشوار جديد من العياط ومحيطها (#${rideId})*\n`;
+    // Broadcast to drivers (مع حجب رقم العميل لحماية الخصوصية ومنع الاتفاق الجانبي)
+    const rawPhone = parsedReq.phone.replace(/[^0-9]/g, '');
+    const maskedPhone = rawPhone.length >= 7
+      ? rawPhone.slice(0, 4) + '****' + rawPhone.slice(-3)
+      : 'محجوب 🔒';
+
+    let driverNotice = `📢 *طلب مشوار خاص جديد من العياط ومحيطها (#${rideId})*\n`;
     driverNotice += `━━━━━━━━━━━━━━━━━━━━\n`;
     driverNotice += `👤 العميل: *${parsedReq.name}*\n`;
-    driverNotice += `📞 الموبايل: *${parsedReq.phone}*\n`;
     driverNotice += `📍 مكان الركوب: *${parsedReq.from}*\n`;
     driverNotice += `🏁 مكان النزول: *${parsedReq.to}*\n`;
     if (parsedReq.offeredPrice > 0) {
@@ -261,9 +265,10 @@ export async function handleMessage(env: Env, msg: InboundMessage): Promise<Outb
     } else {
       driverNotice += `💰 السعر المقترح: *${formatEGP(estimatedPrice)}*\n`;
     }
+    driverNotice += `🔒 هاتف العميل: *${maskedPhone}* (يظهر لك بالكامل فور قبولك المشوار)\n`;
     driverNotice += `━━━━━━━━━━━━━━━━━━━━\n`;
     driverNotice += `🚕 *خيارات الكباتن للرد:*\n`;
-    driverNotice += `✅ للموافقة بنفس السعر: اكتب «*موافق #${rideId}*»\n`;
+    driverNotice += `✅ للموافقة والتحرك فوراً: اكتب «*موافق #${rideId}*»\n`;
     driverNotice += `💬 لاقتراح سعر مختلف (تفاوض): اكتب «*عرض #${rideId} [سعرك]*»\n`;
     driverNotice += `(مثال: *عرض #${rideId} 300*)`;
 

@@ -18,6 +18,8 @@ import { adminPage, adminApi, type AdminPageId } from './admin.js';
 import { runSupervisor } from './supervisor.js';
 import {
   getShuttleLines,
+  getShuttleVehicles,
+  getShuttleBookings,
   bookShuttleSeat,
   getBookingByTicket,
   markBoardedByCodeOrPhone,
@@ -31,6 +33,7 @@ import {
   renderPublicBookingPage,
   renderPrivateRideBookingPage,
   renderRideTicketHtml,
+  renderDriverAttendanceHtml,
 } from './ticket-page.js';
 import {
   pushRowToGoogleSheets,
@@ -201,6 +204,20 @@ export default {
       return new Response(renderPrivateRideBookingPage(), { status: 200, headers: html });
     }
 
+    // ─── كشف رادار الحضور المخصص للسائقين (موبايل) ───
+    if (path === '/attendance' || path === '/driver/attendance' || path === '/driver') {
+      const targetDate = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+      const vehicleId = url.searchParams.get('vehicle_id') ? Number(url.searchParams.get('vehicle_id')) : undefined;
+      const allVehicles = await getShuttleVehicles(env.DB, targetDate);
+      const vehicle = vehicleId ? (allVehicles.find(v => v.id === vehicleId) || allVehicles[0] || null) : (allVehicles[0] || null);
+      const activeVehicleId = vehicle?.id;
+      const bookings = await getShuttleBookings(env.DB, targetDate, undefined, activeVehicleId);
+      return new Response(renderDriverAttendanceHtml(vehicle, allVehicles, bookings, targetDate, url.origin), {
+        status: 200,
+        headers: html,
+      });
+    }
+
     if (path.startsWith('/ticket/')) {
       const code = decodeURIComponent(path.slice('/ticket/'.length));
 
@@ -303,6 +320,21 @@ export default {
           await repo.queueOutbox(env.DB, chatId, waMsg, 'BOT');
         } catch (e) {
           console.warn('[RideBooking] Could not queue ticket outbox message:', e);
+        }
+
+        // إشعار مجموعة الكباتن فوراً مع حجب رقم العميل لحماية الخصوصية
+        try {
+          const groupRow = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'drivers_group_jid'`).first<{ value: string }>();
+          if (groupRow?.value) {
+            const rawP = String(body.clientPhone).replace(/[^0-9]/g, '');
+            const maskP = rawP.length >= 7 ? rawP.slice(0, 4) + '****' + rawP.slice(-3) : 'محجوب 🔒';
+            const priceText = body.offeredPrice ? `${body.offeredPrice} جنيه` : 'حسب التسعيرة';
+            const carText = body.carType ? ` (${body.carType})` : '';
+            const driverMsg = `📢 *طلب مشوار خاص جديد عبر الموقع (#${rideRes.rideId})* 🚕\n━━━━━━━━━━━━━━━━━━━━\n👤 العميل: *${body.clientName}*\n📍 مكان الركوب: *${body.pickupLocation}*\n🏁 مكان النزول: *${body.dropoffLocation}*${carText}\n💰 السعر المقترح: *${priceText}*\n🔒 هاتف العميل: *${maskP}* (يظهر لك بالكامل فور القبول)\n━━━━━━━━━━━━━━━━━━━━\n✅ للقبول فوراً: اكتب «*موافق #${rideRes.rideId}*»\n💬 لاقتراح سعر: اكتب «*عرض #${rideRes.rideId} [سعرك]*»`;
+            await repo.queueOutbox(env.DB, groupRow.value, driverMsg, 'BOT');
+          }
+        } catch (e) {
+          console.warn('[RideBooking] Could not broadcast to drivers group:', e);
         }
 
         // إرسال البيانات فوراً لـ Google Sheets في الخلفية
