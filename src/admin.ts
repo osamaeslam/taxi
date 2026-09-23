@@ -416,30 +416,418 @@ export async function adminPage(env: Env, page: AdminPageId, key: string, reques
   let pageJs = '';
 
   if (page === 'home') {
-    const stats = await todayStats(env.DB);
+    title = 'لوحة التحكم والتحليلات الموحدة';
+
+    const todayDate = new Date().toISOString().slice(0, 10);
+
+    // إحصائيات باصات الجامعات اليوم
+    const shuttleToday = await env.DB.prepare(`
+      SELECT COUNT(*) as total,
+             COALESCE(SUM(CASE WHEN boarded = 1 THEN 1 ELSE 0 END), 0) as boarded,
+             COALESCE(SUM(fare_amount), 0) as revenue
+      FROM shuttle_bookings
+      WHERE booking_date = ? AND status != 'cancelled'
+    `).bind(todayDate).first<{ total: number; boarded: number; revenue: number }>() ?? { total: 0, boarded: 0, revenue: 0 };
+
+    // إحصائيات المشاوير الخاصة اليوم
+    const ridesToday = await env.DB.prepare(`
+      SELECT COUNT(*) as total,
+             COALESCE(SUM(CASE WHEN boarded = 1 THEN 1 ELSE 0 END), 0) as boarded,
+             COALESCE(SUM(COALESCE(final_price, price, client_offered_price, 0)), 0) as revenue
+      FROM rides
+      WHERE date(created_at) = date('now') AND status != 'CANCELLED'
+    `).first<{ total: number; boarded: number; revenue: number }>() ?? { total: 0, boarded: 0, revenue: 0 };
+
+    // إحصائيات كل الأوقات
+    const shuttleAll = await env.DB.prepare(`
+      SELECT COUNT(*) as total,
+             COALESCE(SUM(CASE WHEN boarded = 1 THEN 1 ELSE 0 END), 0) as boarded,
+             COALESCE(SUM(fare_amount), 0) as revenue
+      FROM shuttle_bookings WHERE status != 'cancelled'
+    `).first<{ total: number; boarded: number; revenue: number }>() ?? { total: 0, boarded: 0, revenue: 0 };
+
+    const ridesAll = await env.DB.prepare(`
+      SELECT COUNT(*) as total,
+             COALESCE(SUM(CASE WHEN boarded = 1 THEN 1 ELSE 0 END), 0) as boarded,
+             COALESCE(SUM(COALESCE(final_price, price, client_offered_price, 0)), 0) as revenue
+      FROM rides WHERE status != 'CANCELLED'
+    `).first<{ total: number; boarded: number; revenue: number }>() ?? { total: 0, boarded: 0, revenue: 0 };
+
+    const driversCount = await env.DB.prepare(`SELECT COUNT(*) as c FROM drivers WHERE active = 1`).first<{ c: number }>() ?? { c: 0 };
+
+    // أعلى الجامعات إقبالاً
+    const { results: topLines } = await env.DB.prepare(`
+      SELECT l.name, l.destination, COUNT(b.id) as students,
+             COALESCE(SUM(CASE WHEN b.boarded = 1 THEN 1 ELSE 0 END), 0) as boarded_count
+      FROM shuttle_lines l
+      LEFT JOIN shuttle_bookings b ON b.line_id = l.id AND b.status != 'cancelled'
+      GROUP BY l.id
+      ORDER BY students DESC
+      LIMIT 5
+    `).all();
+
+    // توزيع القرى والمناطق بالعياط
+    const { results: topVillages } = await env.DB.prepare(`
+      SELECT loc, COUNT(*) as cnt FROM (
+        SELECT pickup_location as loc FROM shuttle_bookings WHERE pickup_location IS NOT NULL AND pickup_location != ''
+        UNION ALL
+        SELECT from_text as loc FROM rides WHERE from_text IS NOT NULL AND from_text != ''
+      ) GROUP BY loc ORDER BY cnt DESC LIMIT 5
+    `).all();
+
+    // استعلام أحدث العمليات المشتركة
+    const { results: recentShuttles } = await env.DB.prepare(`
+      SELECT b.id, b.ticket_code, b.student_name as name, b.student_phone as phone,
+             b.pickup_location, b.boarded, b.fare_amount, b.created_at, 'shuttle' as kind,
+             COALESCE(l.destination, l.name) as dest
+      FROM shuttle_bookings b
+      JOIN shuttle_lines l ON l.id = b.line_id
+      ORDER BY b.id DESC LIMIT 4
+    `).all();
+
+    const { results: recentRides } = await env.DB.prepare(`
+      SELECT r.id, r.ticket_code, r.client_name as name, r.client_phone as phone,
+             r.from_text as pickup_location, r.to_text as dest, r.boarded,
+             COALESCE(r.final_price, r.price, r.client_offered_price, 0) as fare_amount,
+             r.created_at, 'ride' as kind
+      FROM rides r
+      ORDER BY r.id DESC LIMIT 4
+    `).all();
+
+    const combinedActivity = [...(recentShuttles || []), ...(recentRides || [])].sort((a: any, b: any) =>
+      new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    ).slice(0, 6);
+
+    // إعدادات Google Sheets
+    const sheetsRow = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'google_sheets_webhook_url'`).first<{ value: string }>();
+    const sheetsWebhookUrl = sheetsRow?.value || '';
+
     const gw = await gatewayStatus(env.ADMIN_KEY);
     const connected = gw?.connection === 'open' || gw?.connection === 'connected';
-    title = 'الرئيسية';
-    body = `<p class="page-desc">نظرة سريعة على تشغيل منظومة كابتن عز بالعياط والقرى المجاورة، خطوط الجامعات، رادار الحضور الذكي، ومشاوير التفاوض.</p>
-<div class="stats">
-  <div class="stat"><div class="n">${stats.total}</div>مشاوير اليوم</div>
-  <div class="stat"><div class="n">${stats.done}</div>مشاوير منفذة</div>
-  <div class="stat"><div class="n">${formatEGP(stats.revenue)}</div>الإيراد الإجمالي</div>
-  <div class="stat"><div class="n">${stats.activeDrivers}</div>كابتن نشط بالعياط</div>
+
+    const totalTodayTrips = shuttleToday.total + ridesToday.total;
+    const totalTodayRev = shuttleToday.revenue + ridesToday.revenue;
+    const totalTodayBoarded = shuttleToday.boarded + ridesToday.boarded;
+    const todayBoardingRate = totalTodayTrips > 0 ? Math.round((totalTodayBoarded / totalTodayTrips) * 100) : 0;
+
+    body = `
+<p class="page-desc">لوحة القيادة المركزية لمنظومة كابتن عز — إدارة متكاملة لباصات الجامعات، المشاوير الخاصة، رادار الحضور الحي، والمزامنة مع Google Sheets و Excel.</p>
+
+<!-- إحصائيات مدمجة وشاملة اليوم -->
+<div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));">
+  <div class="stat" style="border-top: 3px solid #0e7c66;">
+    <div class="n" style="color:#0e7c66;">${totalTodayTrips}</div>
+    <div style="font-weight:bold;margin-bottom:2px;">إجمالي ركاب اليوم</div>
+    <div style="font-size:11px;color:var(--muted);">🎓 ${shuttleToday.total} باصات + 🚗 ${ridesToday.total} مشاوير</div>
+  </div>
+
+  <div class="stat" style="border-top: 3px solid #10b981;">
+    <div class="n" style="color:#10b981;">${totalTodayBoarded} <span style="font-size:14px;color:var(--muted);">(${todayBoardingRate}%)</span></div>
+    <div style="font-weight:bold;margin-bottom:2px;">ركبوا الباص / السيارة 🟢</div>
+    <div style="font-size:11px;color:var(--muted);">حضور مؤكد بالرادار الحي</div>
+  </div>
+
+  <div class="stat" style="border-top: 3px solid #f59e0b;">
+    <div class="n" style="color:#b45309;">${formatEGP(totalTodayRev)}</div>
+    <div style="font-weight:bold;margin-bottom:2px;">إيراد اليوم الإجمالي</div>
+    <div style="font-size:11px;color:var(--muted);">باصات: ${shuttleToday.revenue} ج | مشاوير: ${ridesToday.revenue} ج</div>
+  </div>
+
+  <div class="stat" style="border-top: 3px solid #2563eb;">
+    <div class="n" style="color:#2563eb;">${driversCount.c}</div>
+    <div style="font-weight:bold;margin-bottom:2px;">كباتن نشطين بالعياط</div>
+    <div style="font-size:11px;color:var(--muted);">أسطول 14 راكب وسيارات خاصة</div>
+  </div>
+
+  <div class="stat" style="border-top: 3px solid #8b5cf6;">
+    <div class="n" style="color:#8b5cf6;">${shuttleAll.total + ridesAll.total}</div>
+    <div style="font-weight:bold;margin-bottom:2px;">إجمالي الرحلات الكلي</div>
+    <div style="font-size:11px;color:var(--muted);">إيراد كلي: ${formatEGP(shuttleAll.revenue + ridesAll.revenue)}</div>
+  </div>
 </div>
+
+<!-- شريط المزامنة الذكية مع Google Sheets وإكسل -->
+<div style="background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.03);">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="font-size:26px;">📊</div>
+      <div>
+        <div style="font-weight:bold;font-size:15px;display:flex;align-items:center;gap:8px;">
+          <span>مزامنة قاعدة البيانات مع Google Sheets & Excel</span>
+          ${sheetsWebhookUrl ? '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:bold;">🟢 متصل تلقائياً</span>' : '<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:bold;">⚠️ لم يتم ربط الـ Webhook بعد</span>'}
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">
+          يتم تسجيل كل حجز جديد لباص جامعة أو مشوار خاص تلقائياً في شيت جوجل بدون أي تدخل يدوي.
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <a href="/api/export/csv?date=${todayDate}" class="small" style="background:#10b981;color:#fff;text-decoration:none;padding:8px 12px;border-radius:8px;font-weight:bold;display:flex;align-items:center;gap:6px;">
+        <span>📥</span>
+        <span>تصدير باصات اليوم Excel</span>
+      </a>
+      <a href="/api/export/rides-csv" class="small" style="background:#2563eb;color:#fff;text-decoration:none;padding:8px 12px;border-radius:8px;font-weight:bold;display:flex;align-items:center;gap:6px;">
+        <span>📥</span>
+        <span>تصدير المشاوير الخاصة Excel</span>
+      </a>
+      <button onclick="syncAllToSheets()" class="small" style="background:#0e7c66;color:#fff;padding:8px 14px;border-radius:8px;font-weight:bold;border:none;cursor:pointer;display:flex;align-items:center;gap:6px;">
+        <span>🔄</span>
+        <span>مزامنة كل البيانات لـ Google Sheets</span>
+      </button>
+      <button onclick="toggleSheetsModal()" class="small" style="background:var(--tab-bg);border:1px solid var(--line);padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:bold;">
+        ⚙️ إعدادات الربط
+      </button>
+    </div>
+  </div>
+
+  <!-- صندوق منسدل سريع لإعداد Webhook جوجل شيت -->
+  <div id="sheetsSetupBox" style="display:none;background:#f8fafc;padding:14px;border-radius:10px;border:1px dashed #cbd5e1;margin-top:12px;">
+    <h3 style="margin:0 0 8px;font-size:14px;color:#1e40af;">🔗 رابط Google Apps Script Webhook المباشر:</h3>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+      <input id="sheetsWebhookInput" value="${escHtml(sheetsWebhookUrl)}" placeholder="https://script.google.com/macros/s/AKfycb.../exec" dir="ltr" style="flex:1;min-width:280px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;">
+      <button onclick="saveSheetsUrl()" style="background:#0e7c66;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-weight:bold;cursor:pointer;">حفظ الرابط</button>
+      <button onclick="testSheetsUrl()" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-weight:bold;cursor:pointer;">فحص الاتصال 📡</button>
+    </div>
+    <div style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e2e8f0;font-size:12px;line-height:1.6;color:#334155;">
+      <b>📋 طريقة ربط Google Sheets في 60 ثانية:</b><br>
+      1. افتح شيت جوجل جديد على حسابك في Google Drive.<br>
+      2. من القائمة العلوية اختر <b>Extensions (الإضافات)</b> ثم <b>Apps Script</b>.<br>
+      3. احذف الكود الموجود والصق كود الاستقبال الجاهز (اضغط زر النسخ بالأسفل).<br>
+      4. اضغط <b>Deploy (نشر)</b> ثم <b>New deployment</b> واختر نوع <b>Web app</b>.<br>
+      5. اجعل الخيار: <b>Who has access: Anyone</b> (أي شخص) ثم اضغط Deploy وانسخ رابط Web App وضعه في الصندوق أعلاه!<br>
+      <button onclick="copyGasScript()" class="small" style="margin-top:8px;background:#3b82f6;color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-weight:bold;">📋 نسخ كود Google Apps Script الجاهز</button>
+    </div>
+  </div>
+</div>
+
+<!-- بطاقة توضيحية شاملة لدورة العمل ونظام الشغل بين الثلاثة (العميل - السائق - الإدارة) -->
+<div style="background:linear-gradient(135deg, #f0fdf4, #eff6ff);border:1.5px solid #bbf7d0;border-radius:12px;padding:16px;margin-bottom:16px;">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+    <span style="font-size:22px;">💡</span>
+    <h3 style="margin:0;font-size:15px;color:#065f46;">كيف تعمل المنظومة بين الأطراف الثلاثة (العميل 👤 — الكابتن 🚗 — الإدارة 👔)؟</h3>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:12px;font-size:13px;color:#1e293b;line-height:1.6;">
+    <div style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e2e8f0;">
+      <div style="font-weight:bold;color:#0e7c66;margin-bottom:4px;">1. العميل / الطالب 👤:</div>
+      <div>• يدخل رابط الحجز <a href="/book" target="_blank" style="font-weight:bold;color:#0e7c66;">(/book للجامعات)</a> أو <a href="/ride" target="_blank" style="font-weight:bold;color:#2563eb;">(/ride للمشاوير الخاصة)</a>، أو يرسل رسالة عادية للبوت بالواتساب.<br>• <b>لا يحتاج تسجيل دخول إطلاقاً!</b> فقط اسمه ورقم واتساب ومكان الركوب.<br>• يستلم فوراً رسالة واتساب برابط تذكرته الذكية، وعند ركوبه يضغط زر <b>«أنا ركبت الآن 🟢»</b>.</div>
+    </div>
+    <div style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e2e8f0;">
+      <div style="font-weight:bold;color:#2563eb;margin-bottom:4px;">2. الكابتن / السائق 🚗:</div>
+      <div>• يفتح رابط <b>«رادار الحضور والركوب»</b> من هاتفه بدون برامج معقدة، أو يصله كشف الركاب برسالة واتساب.<br>• يرى قائمة الطلاب بالألوان: <b style="color:#10b981;">الأخضر 🟢</b> ركب بالفعل، و<b style="color:#ef4444;">الأحمر 🔴</b> بالانتظار.<br>• بنقرة واحدة على اسم أي راكب يمكنه تحويله لأخضر، ومعه زر اتصال واتصال هاتفي مباشر بكل راكب.</div>
+    </div>
+    <div style="background:#fff;padding:12px;border-radius:8px;border:1px solid #e2e8f0;">
+      <div style="font-weight:bold;color:#8b5cf6;margin-bottom:4px;">3. الإدارة وصاحب العمل 👔:</div>
+      <div>• متابعة حية لجميع خطوط الجامعات الـ 16 والمشاوير الخاصة في مكان واحد.<br>• تنزيل شيت Excel يومي بنقرة زر في أي وقت أو كل يوم صباحاً.<br>• مزامنة آلية كاملة مع Google Sheets الخاص بك مع كل حجز جديد!</div>
+    </div>
+  </div>
+</div>
+
+<!-- قسم التحليلات والرسوم البيانية المصغرة -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:14px;margin-bottom:16px;">
+  <!-- تحليل خطوط الجامعات -->
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h3 style="margin:0;font-size:14px;display:flex;align-items:center;gap:6px;">
+        <span>🎓</span>
+        <span>أعلى الجامعات إقبالاً وعدد الطلاب</span>
+      </h3>
+      <a href="/admin/shuttle?key=${escHtml(key)}" style="font-size:12px;color:var(--accent);text-decoration:none;font-weight:bold;">كل الخطوط الـ 16 ⬅️</a>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      ${(topLines ?? []).map((l: any) => {
+        const max = Math.max(...(topLines.map((x: any) => Number(x.students) || 1)), 1);
+        const pct = Math.round(((Number(l.students) || 0) / max) * 100);
+        return `
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;font-weight:bold;">
+            <span>${escHtml(l.destination || l.name)}</span>
+            <span>${l.students} طالب (${l.boarded_count || 0} ركبوا 🟢)</span>
+          </div>
+          <div style="background:#f1f5f9;border-radius:6px;height:8px;overflow:hidden;">
+            <div style="background:linear-gradient(90deg, #0e7c66, #10b981);height:100%;width:${Math.max(pct, 8)}%;border-radius:6px;"></div>
+          </div>
+        </div>`;
+      }).join('') || '<div class="muted" style="font-size:12px;text-align:center;padding:10px;">لا حجوزات مسجلة بعد.</div>'}
+    </div>
+  </div>
+
+  <!-- تحليل مناطق وقرى العياط الأكثر نشاطاً -->
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h3 style="margin:0;font-size:14px;display:flex;align-items:center;gap:6px;">
+        <span>📍</span>
+        <span>توزيع نقاط الركوب والقرى بالعياط</span>
+      </h3>
+      <a href="/admin/pricing?key=${escHtml(key)}" style="font-size:12px;color:var(--accent);text-decoration:none;font-weight:bold;">تسعير القرى ⬅️</a>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      ${(topVillages ?? []).map((v: any) => {
+        const max = Math.max(...(topVillages.map((x: any) => Number(x.cnt) || 1)), 1);
+        const pct = Math.round(((Number(v.cnt) || 0) / max) * 100);
+        return `
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;font-weight:bold;">
+            <span>${escHtml(v.loc || 'العياط')}</span>
+            <span>${v.cnt} راكب</span>
+          </div>
+          <div style="background:#f1f5f9;border-radius:6px;height:8px;overflow:hidden;">
+            <div style="background:linear-gradient(90deg, #2563eb, #3b82f6);height:100%;width:${Math.max(pct, 8)}%;border-radius:6px;"></div>
+          </div>
+        </div>`;
+      }).join('') || '<div class="muted" style="font-size:12px;text-align:center;padding:10px;">لا بيانات قرى كافية بعد.</div>'}
+    </div>
+  </div>
+</div>
+
+<!-- جدول أحدث الحجوزات والمشاوير المباشرة -->
+<div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:20px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <h3 style="margin:0;font-size:15px;font-weight:bold;">⚡ شريط أحدث الحجوزات والمشاوير الحية</h3>
+    <div style="display:flex;gap:8px;">
+      <a href="/book" target="_blank" style="background:#eff6ff;color:#1d4ed8;padding:5px 10px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:bold;border:1px solid #bfdbfe;">+ حجز باص جامعة 🎓</a>
+      <a href="/ride" target="_blank" style="background:#ecfdf5;color:#047857;padding:5px 10px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:bold;border:1px solid #a7f3d0;">+ طلب مشوار خاص 🚗</a>
+    </div>
+  </div>
+
+  <table>
+    <tr>
+      <th>النوع</th>
+      <th>كود التذكرة</th>
+      <th>الاسم والراكب</th>
+      <th>مكان الركوب</th>
+      <th>الوجهة</th>
+      <th>الأجرة</th>
+      <th>الحالة</th>
+      <th>إجراء</th>
+    </tr>
+    ${combinedActivity.map((act: any) => `
+    <tr>
+      <td>${act.kind === 'shuttle' ? '<span style="background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;">🎓 باص جامعة</span>' : '<span style="background:#ecfdf5;color:#047857;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;">🚗 مشوار خاص</span>'}</td>
+      <td style="font-weight:bold;font-family:monospace;letter-spacing:1px;">${escHtml(act.ticket_code || ('#' + act.id))}</td>
+      <td>
+        <div style="font-weight:bold;">${escHtml(act.name || 'عميل')}</div>
+        <div style="font-size:11px;color:var(--muted);" dir="ltr">${escHtml(act.phone || '')}</div>
+      </td>
+      <td>${escHtml(act.pickup_location || 'العياط')}</td>
+      <td>${escHtml(act.dest || 'وجهة خاصة')}</td>
+      <td style="font-weight:bold;color:#047857;">${act.fare_amount ? `${act.fare_amount} ج` : 'قيد التفاوض'}</td>
+      <td>${act.boarded === 1 ? '<span style="color:#10b981;font-weight:bold;">🟢 ركب الباص</span>' : '<span style="color:#ef4444;font-weight:bold;">🔴 بالانتظار</span>'}</td>
+      <td>
+        <a href="/ticket/${escHtml(act.ticket_code || act.id)}" target="_blank" class="small" style="text-decoration:none;display:inline-block;padding:4px 8px;">تذكرة ↗</a>
+      </td>
+    </tr>
+    `).join('') || '<tr><td colspan="8" class="muted" style="text-align:center;">لا عمليات حديثة بعد.</td></tr>'}
+  </table>
+</div>
+
 <span class="pill-conn ${connected ? 'on' : 'off'}">${connected ? '🟢 واتساب متصل' + (gw?.user ? ' — ' + escHtml(gw.user) : '') : '🔴 واتساب غير متصل — ادخل على صفحة واتساب للربط'}</span>
+
 <div class="cards">
-  <a class="card" href="/admin/attendance?key=${escHtml(key)}" style="border: 2px solid #10b981; background: #f0fdf4;"><div class="e">🟢</div><div class="t">رادار الحضور والركوب الحي</div><div class="d">شيت حي للسائق والمدير: الأخضر ركب، والأحمر بالانتظار، مع تصدير شيت Excel و Google Sheets</div></a>
+  <a class="card" href="/admin/attendance?key=${escHtml(key)}" style="border: 2px solid #10b981; background: #f0fdf4;"><div class="e">🟢</div><div class="t">رادار الحضور والركوب الحي</div><div class="d">شيت حي تفاعلي للسائق والمدير: الأخضر ركب، والأحمر بالانتظار، مع نقرة لتسجيل الصعود</div></a>
   <a class="card" href="/admin/shuttle?key=${escHtml(key)}" style="border: 2px solid #2980b9;"><div class="e">🎓</div><div class="t">خطوط وباصات الجامعات</div><div class="d">16 خط لجامعات مصر (القاهرة، 6 أكتوبر، MUST، حلوان، بدر...)، أسطول 14 راكب، وكشوف الركاب</div></a>
   <a class="card" href="/admin/clients?key=${escHtml(key)}" style="border: 2px solid #8b5cf6;"><div class="e">👥</div><div class="t">دليل العملاء والركاب</div><div class="d">سجل كامل ببيانات الطلاب والعملاء، القرى، الوجهات المفضلة، وسجل المشاوير</div></a>
-  <a class="card" href="/admin/simulator?key=${escHtml(key)}" style="border: 2px solid var(--accent);"><div class="e">🧪</div><div class="t">محاكي واتساب والتفاوض</div><div class="d">تجربة حجز المشوار، تفاوض الأسعار بين العميل والسائق، ورسالة «ركبت» الذكية</div></a>
   <a class="card" href="/admin/rides?key=${escHtml(key)}"><div class="e">🧾</div><div class="t">المشاوير والتفاوض</div><div class="d">طلبات العملاء، عروض أسعار السائقين، والاتفاق النهائي بالسعر المقبول</div></a>
   <a class="card" href="/admin/drivers?key=${escHtml(key)}"><div class="e">🚗</div><div class="t">كباتن وسيارات العياط</div><div class="d">إدارة سيارات الـ 14 راكب والسيارات الخاصة، عمولة المشاوير وحالة التوفر</div></a>
   <a class="card" href="/admin/chats?key=${escHtml(key)}"><div class="e">💬</div><div class="t">المحادثات</div><div class="d">دردش مع العملاء والطلاب من الموقع — رد كبشر أو تابع ردود البوت</div></a>
   <a class="card" href="/admin/pricing?key=${escHtml(key)}"><div class="e">💰</div><div class="t">تسعير القرى والأحزمة</div><div class="d">أسعار الانتقال من العياط وقراها لمناطق الجيزة والقاهرة والمحافظات بالجنيه المصري</div></a>
   <a class="card" href="/admin/whatsapp?key=${escHtml(key)}"><div class="e">📱</div><div class="t">واتساب</div><div class="d">ربط رقم الشركة وبوت الواتساب</div></a>
-  <a class="card" href="/admin/settings?key=${escHtml(key)}"><div class="e">⚙️</div><div class="t">الإعدادات</div><div class="d">تشغيل البوت والـ AI وإعدادات مجموعة كباتن العياط</div></a>
+  <a class="card" href="/admin/settings?key=${escHtml(key)}"><div class="e">⚙️</div><div class="t">الإعدادات</div><div class="d">تشغيل البوت والـ AI وإعدادات مجموعة كباتن العياط وربط Google Sheets</div></a>
 </div>`;
+
+    pageJs = `
+function toggleSheetsModal() {
+  const box = document.getElementById('sheetsSetupBox');
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
+async function saveSheetsUrl() {
+  const url = document.getElementById('sheetsWebhookInput').value.trim();
+  const res = await postApi('settings.set', { google_sheets_webhook_url: url });
+  if (res) {
+    alert('✅ تم حفظ رابط Google Sheets Webhook بنجاح!');
+    location.reload();
+  }
+}
+
+async function testSheetsUrl() {
+  const url = document.getElementById('sheetsWebhookInput').value.trim();
+  if (!url) { alert('يرجى كتابة رابط Webhook أولاً'); return; }
+  alert('⏳ جاري فحص الاتصال بشيت جوجل...');
+  try {
+    const res = await fetch('/api/sheets/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      alert('🎉 الاتصال ناجح 100%! شيت جوجل استلم إشارة الاختبار بنجاح.');
+    } else {
+      alert('⚠️ لم ينجح الاتصال: ' + (data.error || 'تأكد من نشر Web App وجعل الصلاحية Anyone'));
+    }
+  } catch (err) {
+    alert('خطأ شبكة أثناء الفحص: ' + err);
+  }
+}
+
+async function syncAllToSheets() {
+  if (!confirm('هل تريد مزامنة كافة بيانات باصات الجامعات والمشاوير الخاصة الحالية إلى Google Sheets الآن؟')) return;
+  alert('⏳ جاري إرسال كافة السجلات إلى شيت جوجل...');
+  try {
+    const res = await fetch('/api/sheets/sync-all', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' }
+    });
+    const data = await res.json();
+    if (data.ok) {
+      alert('🎉 تمت المزامنة بنجاح! تم تصدير ' + data.syncedCount + ' سجل إلى Google Sheets.');
+    } else {
+      alert('⚠️ تعذر المزامنة: ' + (data.error || 'يرجى التأكد من ضبط رابط Google Sheets أولاً'));
+    }
+  } catch (err) {
+    alert('خطأ شبكة أثناء المزامنة: ' + err);
+  }
+}
+
+function copyGasScript() {
+  const script = \`function doPost(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    if (sheet.getLastRow() === 0) {
+      sheet.appendRow(["النوع", "التاريخ", "كود التذكرة", "الاسم", "رقم الهاتف", "مكان الركوب", "مكان النزول", "الأجرة", "حالة الحضور", "ملاحظات", "وقت التسجيل"]);
+      sheet.getRange(1, 1, 1, 11).setFontWeight("bold").setBackground("#e2e8f0");
+    }
+    var data = JSON.parse(e.postData.contents);
+    sheet.appendRow([
+      data.type || "حجز",
+      data.date || "",
+      data.ticketCode || "",
+      data.name || "",
+      data.phone || "",
+      data.from || "",
+      data.to || "",
+      data.price || 0,
+      data.status || "",
+      data.notes || "",
+      new Date().toLocaleString("ar-EG")
+    ]);
+    return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: err.toString() })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, msg: "Captain Ezz Sheets Webhook is active" })).setMimeType(ContentService.MimeType.JSON);
+}\`;
+  navigator.clipboard.writeText(script).then(() => {
+    alert('📋 تم نسخ كود Google Apps Script إلى الحافظة! الصقه الآن في Apps Script في شيت جوجل.');
+  }).catch(() => {
+    prompt('انسخ الكود التالي:', script);
+  });
+}
+`;
+
   } else if (page === 'chats') {
     const convs = await getConversations(env.DB, 30);
     title = 'المحادثات';
@@ -1642,6 +2030,19 @@ export async function adminApi(request: Request, env: Env, action: string): Prom
           }
         }
         return Response.json({ ok: true, replies: results || [] });
+      }
+
+      // ─── مزامنة Google Sheets ───
+      case 'sheets.sync': {
+        const { syncAllBookingsAndRidesToSheets } = await import('./sheets.js');
+        const res = await syncAllBookingsAndRidesToSheets(env.DB);
+        return Response.json(res);
+      }
+
+      case 'sheets.test': {
+        const { testSheetsConnection } = await import('./sheets.js');
+        const res = await testSheetsConnection(String(body.url ?? ''));
+        return Response.json(res);
       }
 
       default:

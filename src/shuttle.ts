@@ -439,3 +439,107 @@ export async function generateBookingsCsv(db: D1Database, targetDate?: string): 
   return csv;
 }
 
+export async function bookPrivateRide(
+  db: D1Database,
+  data: {
+    clientName: string;
+    clientPhone: string;
+    pickupLocation: string;
+    dropoffLocation: string;
+    rideDate?: string;
+    rideTime?: string;
+    carType?: string;
+    offeredPrice?: number;
+    notes?: string;
+  }
+): Promise<{ ok: boolean; rideId?: number; ticketCode?: string; error?: string }> {
+  let cleanPhone = String(data.clientPhone).replace(/[^0-9]/g, '');
+  if (cleanPhone.startsWith('01')) cleanPhone = '20' + cleanPhone.slice(1);
+
+  const fromText = data.pickupLocation.trim();
+  const toText = data.dropoffLocation.trim();
+  const notesText = [
+    data.carType ? `السيارة: ${data.carType}` : '',
+    data.rideTime ? `الموعد: ${data.rideTime}` : '',
+    data.notes ? data.notes.trim() : ''
+  ].filter(Boolean).join(' | ');
+
+  const res = await db.prepare(`
+    INSERT INTO rides (client_phone, client_name, from_text, to_text, price, client_offered_price, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'NEW', datetime('now'))
+  `).bind(
+    cleanPhone,
+    data.clientName.trim(),
+    fromText,
+    toText,
+    data.offeredPrice || null,
+    data.offeredPrice || null
+  ).run();
+
+  const rideId = Number(res.meta.last_row_id);
+  const ticketCode = 'RIDE-' + (2000 + rideId);
+
+  await db.prepare(`UPDATE rides SET ticket_code = ? WHERE id = ?`).bind(ticketCode, rideId).run();
+
+  // Sync with clients directory
+  try {
+    await db.prepare(`
+      INSERT INTO clients (phone, name, village, destination_fav, trips_count, notes)
+      VALUES (?, ?, ?, ?, 1, ?)
+      ON CONFLICT(phone) DO UPDATE SET
+        name = excluded.name,
+        village = excluded.village,
+        destination_fav = excluded.destination_fav,
+        trips_count = trips_count + 1
+    `).bind(cleanPhone, data.clientName.trim(), fromText, toText, notesText).run();
+  } catch {}
+
+  return { ok: true, rideId, ticketCode };
+}
+
+export async function getRideByTicket(db: D1Database, ticketOrPhone: string): Promise<any | null> {
+  const clean = ticketOrPhone.trim();
+  let cleanPhone = clean.replace(/[^0-9]/g, '');
+  if (cleanPhone.startsWith('01')) cleanPhone = '20' + cleanPhone.slice(1);
+
+  const ride = await db.prepare(`
+    SELECT r.*, d.name as driver_name, d.phone as driver_phone, d.car as driver_car, d.plate as driver_plate
+    FROM rides r
+    LEFT JOIN drivers d ON r.driver_id = d.id
+    WHERE r.ticket_code = ? OR r.client_phone = ? OR r.client_phone = ? OR ('RIDE-' || (2000 + r.id)) = ?
+    ORDER BY r.id DESC LIMIT 1
+  `).bind(clean, clean, cleanPhone, clean).first<any>();
+
+  return ride || null;
+}
+
+export async function generateRidesCsv(db: D1Database): Promise<string> {
+  const rides = await db.prepare(`
+    SELECT r.*, d.name as driver_name, d.phone as driver_phone, d.car as driver_car, d.plate as driver_plate
+    FROM rides r
+    LEFT JOIN drivers d ON r.driver_id = d.id
+    ORDER BY r.id DESC
+  `).all<any>();
+
+  let csv = '\uFEFF';
+  csv += 'كود المشوار,اسم العميل,رقم الموبايل,مكان الركوب (العياط/القرية),مكان التوصيل,السعر المقدر,السعر المتفق عليه,حالة المشوار,اسم الكابتن,موبايل الكابتن,سيارة الكابتن,تاريخ وطلب المشوار,حالة الركوب\n';
+
+  for (const r of (rides.results || [])) {
+    const ticket = r.ticket_code || ('RIDE-' + (2000 + r.id));
+    const boarded = r.boarded === 1 ? '🟢 ركب وحضر' : '⏳ لم يركب بعد';
+    const statusMap: Record<string, string> = {
+      'NEW': 'طلب جديد',
+      'DISPATCHING': 'جاري البحث عن كابتن',
+      'ASSIGNED': 'تم تعيين كابتن',
+      'ARRIVED': 'الكابتن وصل لمكانك',
+      'IN_RIDE': 'المشوار جاري حالياً',
+      'COMPLETED': 'تم المشوار بنجاح',
+      'CANCELLED': 'ملغي'
+    };
+    const st = statusMap[r.status] || r.status;
+    csv += `"${ticket}","${r.client_name || 'عميل'}","${r.client_phone}","${r.from_text || 'العياط'}","${r.to_text || '—'}","${r.client_offered_price || r.price || 0}","${r.final_price || r.price || 0}","${st}","${r.driver_name || 'بانتظار كابتن'}","${r.driver_phone || '—'}","${r.driver_car || '—'}","${r.created_at}","${boarded}"\n`;
+  }
+
+  return csv;
+}
+

@@ -22,8 +22,21 @@ import {
   getBookingByTicket,
   markBoardedByCodeOrPhone,
   generateBookingsCsv,
+  bookPrivateRide,
+  getRideByTicket,
+  generateRidesCsv,
 } from './shuttle.js';
-import { renderTicketHtml, renderPublicBookingPage } from './ticket-page.js';
+import {
+  renderTicketHtml,
+  renderPublicBookingPage,
+  renderPrivateRideBookingPage,
+  renderRideTicketHtml,
+} from './ticket-page.js';
+import {
+  pushRowToGoogleSheets,
+  syncAllBookingsAndRidesToSheets,
+  testSheetsConnection,
+} from './sheets.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -184,16 +197,37 @@ export default {
       return new Response(renderPublicBookingPage(lines), { status: 200, headers: html });
     }
 
+    if (path === '/ride' || path === '/book-ride') {
+      return new Response(renderPrivateRideBookingPage(), { status: 200, headers: html });
+    }
+
     if (path.startsWith('/ticket/')) {
       const code = decodeURIComponent(path.slice('/ticket/'.length));
-      const booking = await getBookingByTicket(env.DB, code);
-      if (!booking) {
-        return new Response(
-          '<div style="direction:rtl;padding:40px;text-align:center;font-family:sans-serif;"><h2>عذراً، التذكرة غير موجودة</h2><p>يرجى التأكد من كود التذكرة أو مراجعة إدارة كابتن عز.</p><br><a href="/book" style="color:#0e7c66;font-weight:bold;text-decoration:none;">حجز تذكرة جديدة ⬅️</a></div>',
-          { status: 404, headers: html }
-        );
+
+      // 1) فحص المشاوير الخاصة أولاً إذا كان الكود RIDE-
+      if (code.toUpperCase().startsWith('RIDE-')) {
+        const ride = await getRideByTicket(env.DB, code);
+        if (ride) {
+          return new Response(renderRideTicketHtml(ride, url.origin), { status: 200, headers: html });
+        }
       }
-      return new Response(renderTicketHtml(booking, url.origin), { status: 200, headers: html });
+
+      // 2) فحص باصات الجامعات
+      const booking = await getBookingByTicket(env.DB, code);
+      if (booking) {
+        return new Response(renderTicketHtml(booking, url.origin), { status: 200, headers: html });
+      }
+
+      // 3) فحص المشاوير الخاصة احتياطياً
+      const fallbackRide = await getRideByTicket(env.DB, code);
+      if (fallbackRide) {
+        return new Response(renderRideTicketHtml(fallbackRide, url.origin), { status: 200, headers: html });
+      }
+
+      return new Response(
+        '<div style="direction:rtl;padding:40px;text-align:center;font-family:sans-serif;"><h2>عذراً، التذكرة غير موجودة</h2><p>يرجى التأكد من كود التذكرة أو مراجعة إدارة كابتن عز.</p><br><a href="/book" style="color:#0e7c66;font-weight:bold;text-decoration:none;">حجز باص جامعة ⬅️</a> &nbsp;|&nbsp; <a href="/ride" style="color:#2563eb;font-weight:bold;text-decoration:none;">طلب مشوار خاص ⬅️</a></div>',
+        { status: 404, headers: html }
+      );
     }
 
     if (request.method === 'POST' && path === '/api/book') {
@@ -223,18 +257,100 @@ export default {
         } catch (e) {
           console.warn('[Booking] Could not queue ticket outbox message:', e);
         }
+
+        // إرسال البيانات فوراً لـ Google Sheets في الخلفية
+        pushRowToGoogleSheets(env.DB, {
+          type: '🎓 باص جامعة',
+          date: body.bookingDate || new Date().toISOString().slice(0, 10),
+          ticketCode: bookRes.ticketCode,
+          name: body.studentName,
+          phone: body.studentPhone,
+          from: body.pickupLocation || 'العياط',
+          to: `جامعة (خط ${body.lineId})`,
+          price: 60,
+          status: '🔴 بالانتظار',
+          notes: body.notes || ''
+        }).catch(() => {});
       }
 
       return json(bookRes);
+    }
+
+    if (request.method === 'POST' && path === '/api/book-ride') {
+      const body = await request.json<any>();
+      if (!body.clientName || !body.clientPhone || !body.pickupLocation || !body.dropoffLocation) {
+        return json({ error: 'الاسم ورقم الهاتف ومكان الركوب والنزول مطلوبة' }, 400);
+      }
+      const rideRes = await bookPrivateRide(env.DB, {
+        clientName: body.clientName,
+        clientPhone: body.clientPhone,
+        pickupLocation: body.pickupLocation,
+        dropoffLocation: body.dropoffLocation,
+        carType: body.carType,
+        rideTime: body.rideTime,
+        offeredPrice: body.offeredPrice,
+        notes: body.notes,
+      });
+
+      if (rideRes.ok && rideRes.ticketCode) {
+        // إرسال رسالة التذكرة للعميل بالواتساب
+        try {
+          let cleanPhone = String(body.clientPhone).replace(/[^0-9]/g, '');
+          if (cleanPhone.startsWith('01')) cleanPhone = '20' + cleanPhone.slice(1);
+          const chatId = `${cleanPhone}@s.whatsapp.net`;
+          const ticketUrl = `${url.origin}/ticket/${rideRes.ticketCode}`;
+          const waMsg = `🚗 مرحباً بك يا ${body.clientName}!\nتم استلام طلب مشوارك الخاص مع *كابتن عز لخدمات النقل الذكي والمشاوير* 🚕\n\n🔖 كود المشوار: *${rideRes.ticketCode}*\n📍 من: ${body.pickupLocation}\n🏁 إلى: ${body.dropoffLocation}\n\n🔗 رابط متابعة وتذكرة المشوار:\n${ticketUrl}\n\nجاري إبلاغ أقرب كابتن لك بالعياط للتحرك فوراً. رحلة سعيدة وآمنة! ✨`;
+          await repo.queueOutbox(env.DB, chatId, waMsg, 'BOT');
+        } catch (e) {
+          console.warn('[RideBooking] Could not queue ticket outbox message:', e);
+        }
+
+        // إرسال البيانات فوراً لـ Google Sheets في الخلفية
+        pushRowToGoogleSheets(env.DB, {
+          type: '🚗 مشوار خاص',
+          date: new Date().toISOString().slice(0, 10),
+          ticketCode: rideRes.ticketCode,
+          name: body.clientName,
+          phone: body.clientPhone,
+          from: body.pickupLocation,
+          to: body.dropoffLocation,
+          price: body.offeredPrice || 0,
+          status: '⏳ طلب جديد',
+          notes: [body.carType, body.rideTime, body.notes].filter(Boolean).join(' | ')
+        }).catch(() => {});
+      }
+
+      return json(rideRes);
     }
 
     if (request.method === 'POST' && path === '/api/board') {
       const body = await request.json<any>();
       const code = body.code || body.phone;
       if (!code) return json({ error: 'كود التذكرة أو الهاتف مطلوب' }, 400);
+
+      // فحص إن كان مشواراً خاصاً (RIDE-XXXX)
+      if (String(code).toUpperCase().startsWith('RIDE-')) {
+        const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+        await env.DB.prepare(`
+          UPDATE rides
+          SET boarded = 1, boarded_at = ?, status = CASE WHEN status = 'NEW' THEN 'IN_RIDE' ELSE status END
+          WHERE ticket_code = ? OR ('RIDE-' || (2000 + id)) = ?
+        `).bind(timeStr, code, code).run();
+        return json({ ok: true, time: timeStr, type: 'ride' });
+      }
+
       const boardRes = await markBoardedByCodeOrPhone(env.DB, code);
-      if (!boardRes.ok) return json({ error: boardRes.error || 'فشل تسجيل الحضور' }, 400);
-      return json({ ok: true, time: boardRes.booking?.boarded_at });
+      if (!boardRes.ok) {
+        // فحص احتياطي إذا كان في جدول المشاوير
+        const ride = await getRideByTicket(env.DB, code);
+        if (ride) {
+          const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+          await env.DB.prepare(`UPDATE rides SET boarded = 1, boarded_at = ? WHERE id = ?`).bind(timeStr, ride.id).run();
+          return json({ ok: true, time: timeStr, type: 'ride' });
+        }
+        return json({ error: boardRes.error || 'فشل تسجيل الحضور' }, 400);
+      }
+      return json({ ok: true, time: boardRes.booking?.boarded_at, type: 'shuttle' });
     }
 
     if (path === '/api/export/csv') {
@@ -248,6 +364,29 @@ export default {
           'cache-control': 'no-cache',
         },
       });
+    }
+
+    if (path === '/api/export/rides-csv') {
+      const csv = await generateRidesCsv(env.DB);
+      return new Response(csv, {
+        status: 200,
+        headers: {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="Captain-Ezz-Private-Rides.csv"`,
+          'cache-control': 'no-cache',
+        },
+      });
+    }
+
+    if (request.method === 'POST' && path === '/api/sheets/test') {
+      const body = await request.json<any>();
+      const res = await testSheetsConnection(body.url);
+      return json(res);
+    }
+
+    if (request.method === 'POST' && path === '/api/sheets/sync-all') {
+      const res = await syncAllBookingsAndRidesToSheets(env.DB);
+      return json(res);
     }
 
     // ─── لوحة الإدارة ───
