@@ -40,6 +40,7 @@ import {
   syncAllBookingsAndRidesToSheets,
   testSheetsConnection,
 } from './sheets.js';
+import { getDynamicZonePricing } from './pricing.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -474,6 +475,12 @@ export default {
     if (request.method === 'POST' && path === '/api/sheets/sync-all') {
       const res = await syncAllBookingsAndRidesToSheets(env.DB);
       return json(res);
+    }
+
+    // ─── تسعيرة المناطق الديناميكية ───
+    if (path === '/api/zone-pricing') {
+      const zones = await getDynamicZonePricing(env.DB);
+      return json({ ok: true, zones });
     }
 
     // ─── لوحة الإدارة ───

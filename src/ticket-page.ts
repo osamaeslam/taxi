@@ -683,7 +683,17 @@ export function renderPrivateRideBookingPage(): string {
       <div class="form-group">
         <label>💰 السعر المقدر / ميزانيتك المقترحة (اختياري)</label>
         <input type="number" id="offered_price" placeholder="مثال: 200 (جنيه)">
-        <div class="villages-hint">يمكنك اقتراح سعرك وسيقوم الكابتن بالتأكيد أو التفاوض معك فوراً عبر واتساب.</div>
+        <div style="margin-top:6px;">
+          <div style="font-size:12px;font-weight:bold;color:#334155;margin-bottom:4px;">🏷️ أو اختر من تسعيرة فئات المناطق الرسمية:</div>
+          <div id="zonePricingChips" style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button type="button" onclick="setOfferedPrice(40)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">🏙️ داخل العياط: 40ج</button>
+            <button type="button" onclick="setOfferedPrice(70)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">🌾 منطقة ريفية: 70ج</button>
+            <button type="button" onclick="setOfferedPrice(240)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">🚗 مدينة: 240ج</button>
+            <button type="button" onclick="setOfferedPrice(550)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">✈️ مطار القاهرة: 550ج</button>
+            <button type="button" onclick="setOfferedPrice(450)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">👑 مشوار خاص: 450ج</button>
+          </div>
+        </div>
+        <div class="villages-hint" style="margin-top:6px;">يمكنك اقتراح سعرك وسيقوم الكابتن بالتأكيد أو التفاوض معك فوراً عبر واتساب.</div>
       </div>
 
       <div class="form-group">
@@ -712,6 +722,31 @@ function setCarType(type) {
   document.getElementById('carTaxi').className = 'car-card ' + (type.includes('تاكسي') ? 'active' : '');
   document.getElementById('carVan').className = 'car-card ' + (type.includes('فان') ? 'active' : '');
 }
+
+function setOfferedPrice(price) {
+  const inp = document.getElementById('offered_price');
+  if (inp) {
+    inp.value = price;
+    inp.focus();
+  }
+}
+
+// Fetch dynamic zone pricing from server
+async function loadDynamicZoneChips() {
+  try {
+    const res = await fetch('/api/zone-pricing');
+    const data = await res.json();
+    if (data.ok && Array.isArray(data.zones) && data.zones.length > 0) {
+      const container = document.getElementById('zonePricingChips');
+      if (container) {
+        container.innerHTML = data.zones.map(z => 
+          \`<button type="button" onclick="setOfferedPrice(\${z.base_price})" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">\${z.icon || '📍'} \${z.name}: \${z.base_price}ج</button>\`
+        ).join('');
+      }
+    }
+  } catch (e) {}
+}
+loadDynamicZoneChips();
 
 function toggleTimeInput() {
   const mode = document.getElementById('ride_time_mode').value;

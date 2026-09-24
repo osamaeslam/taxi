@@ -1,6 +1,9 @@
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require('node:sqlite');
 
 export function getDatabase(dbPath?: string) {
   // On Vercel Serverless / Lambda, root file system is read-only.

@@ -1,6 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Env, Ride, Zone, RideBid } from './types.js';
-import { computeFare, formatEGP } from './pricing.js';
+import { computeFare, formatEGP, getDynamicZonePricing, formatZonePricingForWhatsApp } from './pricing.js';
 import {
   getShuttleLines,
   getShuttleVehicles,
@@ -140,6 +140,36 @@ export async function handleMessage(env: Env, msg: InboundMessage): Promise<Outb
         text: `لا يوجد حجز مسجل لرقمك اليوم.\nلحجز مقعدك فوراً في باصات الجامعات: اكتب *حجز جامعة القاهرة* أو تفضل بزيارة رابط الحجز: /book`,
       }];
     }
+  }
+
+  // 4d. Dynamic Zone Pricing Inquiry (تسعيرة المناطق / أسعار المشاوير / بكام / الأسعار)
+  if (
+    lowerText === 'اسعار' ||
+    lowerText === 'أسعار' ||
+    lowerText === 'الاسعار' ||
+    lowerText === 'الأسعار' ||
+    lowerText.includes('تسعير') ||
+    lowerText.includes('تسعيرة') ||
+    lowerText.includes('تسعيره') ||
+    lowerText.includes('اسعار المناطق') ||
+    lowerText.includes('أسعار المناطق') ||
+    lowerText.includes('اسعار المشاوير') ||
+    lowerText.includes('أسعار المشاوير') ||
+    lowerText.includes('قائمة الاسعار') ||
+    lowerText.includes('قائمه الاسعار') ||
+    lowerText.includes('بكام المشوار') ||
+    lowerText.includes('بكم المشوار') ||
+    lowerText.includes('كام السعر') ||
+    lowerText.includes('تكلفة المشوار') ||
+    lowerText.includes('سعر التوصيل') ||
+    lowerText.includes('سعر التاكسي')
+  ) {
+    const dynamicZones = await getDynamicZonePricing(db);
+    const replyText = formatZonePricingForWhatsApp(dynamicZones);
+    return [{
+      chatId: msg.chatId,
+      text: replyText,
+    }];
   }
 
   // 5. Ride Cancellation (إلغاء / اعتذار)
@@ -318,6 +348,8 @@ export async function handleMessage(env: Env, msg: InboundMessage): Promise<Outb
   menu += `*مكان الركوب*: العياط المحطة (أو قريتك)\n`;
   menu += `*مكان النزول*: جامعة القاهرة (أو وجهتك)\n`;
   menu += `*المبلغ المقدر*: 250 جنيه\n\n`;
+  menu += `5️⃣ *تسعيرة المناطق والمشاوير المعتمدة* 💰:\n`;
+  menu += `• لمعرفة قائمة الأسعار الرسمية (داخل العياط، منطقة ريفية، مدينة، مطار القاهرة، مشوار خاص)... اكتب: «*الأسعار*» أو «*تسعيرة المناطق*».\n\n`;
   menu += `🌐 رابط الحجز الإلكتروني المباشر: /book`;
 
   return [{

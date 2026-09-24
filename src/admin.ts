@@ -11,7 +11,16 @@
 
 import { todayStats, getConversations, getChatMessages, getPausedChats, setPaused, queueOutbox, listIssues, setIssueStatus } from './repo.js';
 import { aiChat } from './ai.js';
-import { formatEGP } from './pricing.js';
+import {
+  formatEGP,
+  getAllZonePricing,
+  getDynamicZonePricing,
+  updateZonePrice,
+  addZonePriceCategory,
+  deleteZonePriceCategory,
+  resetDefaultZonePricing,
+  formatZonePricingForWhatsApp,
+} from './pricing.js';
 import { whatsappTabHtml } from './whatsapp-tab.js';
 import {
   getShuttleLines,
@@ -859,6 +868,12 @@ function doGet(e) {
     </div>
     <div id="ai-summary" style="display:none"></div>
     <div id="thread"></div>
+    <div id="quick-replies" style="display:none;gap:6px;flex-wrap:wrap;padding:6px 0;font-size:12px;">
+      <button type="button" class="small" onclick="quickFillReply('اسعار المناطق والمشاوير')">💰 تسعيرة المناطق</button>
+      <button type="button" class="small" onclick="quickFillReply('مواعيد باصات الجامعات')">🎓 مواعيد باصات الجامعات</button>
+      <button type="button" class="small" onclick="quickFillReply('تذكرتي')">🎫 التذكرة الذكية</button>
+      <button type="button" class="small" onclick="quickFillReply('تم تأكيد حجزك، الكابتن في الطريق')">🚗 تأكيد الكابتن</button>
+    </div>
     <form class="reply-bar" id="reply-form" style="display:none" onsubmit="return sendHuman(event)">
       <input id="reply-text" placeholder="اكتب ردك كبشر…" autocomplete="off">
       <button>📨 إرسال</button>
@@ -916,8 +931,18 @@ async function openChat(chat, btn) {
   document.getElementById('thread-title').dir = 'ltr';
   document.getElementById('ai-summary').style.display = 'none';
   document.getElementById('reply-form').style.display = 'flex';
+  const qr = document.getElementById('quick-replies');
+  if (qr) qr.style.display = 'flex';
   document.getElementById('btn-summary').style.display = '';
   await loadThread(false);
+}
+
+function quickFillReply(txt) {
+  const inp = document.getElementById('reply-text');
+  if (inp) {
+    inp.value = txt;
+    inp.focus();
+  }
 }
 
 function closeChat() {
@@ -982,6 +1007,7 @@ setInterval(() => {
 }, 10000);
 `;
   } else if (page === 'pricing') {
+    const zonePricing = await getAllZonePricing(env.DB);
     const { results: zones } = await env.DB.prepare(`SELECT id, name, aliases, belt FROM zones ORDER BY belt, id`).all();
     const { results: fares } = await env.DB.prepare(
       `SELECT f.id, f.price, f.note, f.from_zone_id, f.to_zone_id, fz.name AS from_name, tz.name AS to_name
@@ -990,7 +1016,7 @@ setInterval(() => {
        JOIN zones tz ON tz.id = f.to_zone_id
        ORDER BY f.id`
     ).all();
-    title = 'تسعير القرى والمناطق';
+    title = 'تسعيرة المناطق والقرى';
     const zoneOptions = (zones ?? [])
       .map((z: any) => `<option value="${z.id}">${escHtml(z.name)} (حزام ${z.belt})</option>`)
       .join('');
@@ -1008,27 +1034,185 @@ setInterval(() => {
         </form>`;
     };
     body = `
-<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:20px;">
   <div>
-    <h2 style="margin:0 0 4px 0;">💰 تسعير القرى والأحزمة ومناطق المشاوير</h2>
-    <p class="page-desc" style="margin:0;">من هنا تقدر تضيف وتظبط أسعار المشاوير من أي قرية أو منطقة للتانية براحتك بالجنيه المصري. كل البيانات هنا بتكون من إدخالك وإدارتك بالكامل.</p>
+    <h2 style="margin:0 0 4px 0;">🏷️ تسعيرة المناطق والمشاوير — كابتن عز بالعياط</h2>
+    <p class="page-desc" style="margin:0;">إدارة تسعيرة فئات المناطق الرئيسية (داخل العياط، ريفية، مدينة، مطار القاهرة، مشوار خاص). أي تعديل هنا ينعكس <b>فورياً في بوت واتساب</b> للعملاء.</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <button type="button" onclick="previewWhatsAppPricing()" style="background:#075e54;color:#fff;border:0;padding:9px 15px;border-radius:8px;font-weight:bold;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+      💬 معاينة رد بوت واتساب
+    </button>
+    <button type="button" onclick="toggleAddCategoryModal()" style="background:#0e7c66;color:#fff;border:0;padding:9px 15px;border-radius:8px;font-weight:bold;cursor:pointer;">
+      ➕ إضافة فئة منطقة
+    </button>
+    <button type="button" class="small" onclick="resetDefaultPricing()" style="padding:9px 12px;border-radius:8px;font-weight:bold;cursor:pointer;">
+      🔄 استعادة الفئات الـ 5
+    </button>
+  </div>
+</div>
+
+<!-- Modal معاينة رسالة الواتساب -->
+<div id="waPreviewModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;padding:16px;">
+  <div style="background:#efeae2;max-width:550px;width:100%;border-radius:14px;overflow:hidden;box-shadow:0 20px 40px rgba(0,0,0,0.3);border:1px solid #c2b9a7;margin:auto;">
+    <div style="background:#075e54;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;">
+      <b style="font-size:15px;display:flex;align-items:center;gap:8px;">📱 معاينة رسالة تسعيرة المناطق في واتساب</b>
+      <button onclick="document.getElementById('waPreviewModal').style.display='none'" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">✕</button>
+    </div>
+    <div style="padding:16px;max-height:70vh;overflow-y:auto;">
+      <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,0.12);border-top-right-radius:2px;font-family:sans-serif;font-size:14px;line-height:1.7;white-space:pre-wrap;color:#111;" id="waPreviewContent">جاري التحميل...</div>
+    </div>
+    <div style="background:#e3ded5;padding:10px 16px;text-align:left;">
+      <button onclick="document.getElementById('waPreviewModal').style.display='none'" style="padding:6px 16px;border-radius:6px;border:1px solid #999;cursor:pointer;">إغلاق</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal تعديل فئة تسعير -->
+<div id="editZoneModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;padding:16px;">
+  <div style="background:var(--card);max-width:520px;width:100%;border-radius:14px;overflow:hidden;box-shadow:0 20px 40px rgba(0,0,0,0.3);border:1px solid var(--line);margin:auto;">
+    <div style="background:var(--accent);color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;">
+      <b style="font-size:15px;" id="editModalTitle">✏️ تعديل تسعيرة الفئة</b>
+      <button onclick="document.getElementById('editZoneModal').style.display='none'" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">✕</button>
+    </div>
+    <form onsubmit="return submitEditZone(event)" style="padding:20px;">
+      <input type="hidden" id="edit_zone_id" name="id">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+        <div>
+          <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">اسم فئة المنطقة</label>
+          <input id="edit_zone_name" name="name" required style="width:100%;">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">الأيقونة / الرمز</label>
+          <input id="edit_zone_icon" name="icon" style="width:100%;">
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+        <div>
+          <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">السعر الأساسي (ذهاب) 💰</label>
+          <input id="edit_zone_base_price" name="base_price" type="number" min="0" required style="width:100%;font-weight:bold;font-size:16px;">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">ذهاب وعودة / انتظار 🔄</label>
+          <input id="edit_zone_return_price" name="return_price" type="number" min="0" style="width:100%;font-weight:bold;">
+        </div>
+      </div>
+      <div style="margin-bottom:16px;">
+        <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">الشرح والقرى والمناطق المشمولة</label>
+        <textarea id="edit_zone_description" name="description" rows="3" style="width:100%;resize:vertical;"></textarea>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button type="button" onclick="document.getElementById('editZoneModal').style.display='none'" style="padding:8px 16px;">إلغاء</button>
+        <button type="submit" style="padding:8px 20px;font-weight:bold;">💾 حفظ التعديلات</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal إضافة فئة جديدة -->
+<div id="addZoneModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;padding:16px;">
+  <div style="background:var(--card);max-width:520px;width:100%;border-radius:14px;overflow:hidden;box-shadow:0 20px 40px rgba(0,0,0,0.3);border:1px solid var(--line);margin:auto;">
+    <div style="background:#0e7c66;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;">
+      <b style="font-size:15px;">➕ إضافة فئة تسعير منطقة جديدة</b>
+      <button onclick="document.getElementById('addZoneModal').style.display='none'" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">✕</button>
+    </div>
+    <form onsubmit="return submitAddZone(event)" style="padding:20px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+        <div>
+          <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">اسم الفئة</label>
+          <input name="name" required placeholder="مثال: مطار سفنكس" style="width:100%;">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">الأيقونة (Emoji)</label>
+          <input name="icon" value="📍" style="width:100%;">
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+        <div>
+          <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">السعر الأساسي (ذهاب) 💰</label>
+          <input name="base_price" type="number" min="0" required placeholder="300" style="width:100%;font-weight:bold;">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">ذهاب وعودة (اختياري)</label>
+          <input name="return_price" type="number" min="0" placeholder="500" style="width:100%;">
+        </div>
+      </div>
+      <div style="margin-bottom:16px;">
+        <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">الشرح والقرى والمناطق المشمولة</label>
+        <textarea name="description" rows="2" placeholder="تفاصيل النطاق الجغرافي المشمول..." style="width:100%;"></textarea>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button type="button" onclick="document.getElementById('addZoneModal').style.display='none'" style="padding:8px 16px;">إلغاء</button>
+        <button type="submit" style="padding:8px 20px;font-weight:bold;">➕ إضافة الفئة</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 1. جدول تسعيرة فئات المناطق الرئيسية المعتمدة -->
+<div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:28px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <h3 style="margin:0;font-size:17px;display:flex;align-items:center;gap:8px;">
+      🏷️ 1. جدول تسعيرة فئات المناطق المعتمدة (تظهر ديناميكياً بواتساب)
+    </h3>
+    <span style="font-size:13px;color:var(--muted);">عدد الفئات النشطة: <b>${zonePricing.filter(z => z.is_active === 1).length}</b> من ${zonePricing.length}</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:40px;">#</th>
+        <th style="min-width:140px;">فئة المنطقة</th>
+        <th style="min-width:120px;">السعر الأساسي (ذهاب)</th>
+        <th style="min-width:130px;">ذهاب وعودة / انتظار</th>
+        <th>الشرح والقرى المشمولة</th>
+        <th style="width:110px;">الحالة في البوت</th>
+        <th style="min-width:170px;">إجراءات التسعير</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${zonePricing.map((item) => `
+      <tr style="${item.is_active === 0 ? 'opacity:0.6;background:var(--tab-bg);' : ''}">
+        <td><b>${item.id}</b></td>
+        <td>
+          <span style="font-size:18px;margin-left:4px;">${item.icon || '📍'}</span>
+          <b>${escHtml(item.name)}</b>
+        </td>
+        <td>
+          <span style="font-size:16px;font-weight:bold;color:#0e7c66;">${formatEGP(item.base_price)}</span>
+        </td>
+        <td>
+          ${item.return_price > 0 ? `<span style="font-weight:bold;">${formatEGP(item.return_price)}</span>` : '<span class="muted">—</span>'}
+        </td>
+        <td style="font-size:13px;color:var(--ink);">${escHtml(item.description || '—')}</td>
+        <td>
+          ${item.is_active === 1 ? '<span class="pill" style="background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;">🟢 نشط بالبوت</span>' : '<span class="pill" style="background:#f1f5f9;color:#64748b;">⚪ معطل</span>'}
+        </td>
+        <td>
+          <button class="small" onclick='openEditZoneModal(${JSON.stringify(item)})' style="font-weight:bold;">✏️ تعديل السعر</button>
+          <button class="small" onclick="toggleZoneActive(${item.id}, ${item.is_active})" title="${item.is_active === 1 ? 'تعطيل من البوت' : 'تفعيل بالبوت'}">
+            ${item.is_active === 1 ? 'إيقاف' : 'تفعيل'}
+          </button>
+          <button class="small danger" onclick="delZoneCategory(${item.id}, '${escHtml(item.name)}')">حذف</button>
+        </td>
+      </tr>`).join('')}
+    </tbody>
+  </table>
+  <div style="font-size:12px;color:var(--muted);margin-top:10px;">
+    💡 <b>ملاحظة ذكية:</b> عند إرسال العميل أي كلمة مثل «<b>الأسعار</b>» أو «<b>تسعيرة المناطق</b>» في واتساب، يرسل البوت جدول الأسعار الحالي أعلاه بشكل فوري ومحدث.
+  </div>
+</div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+  <div>
+    <h3 style="margin:0 0 4px 0;">📍 2. إضافة وتوزيع القرى الفردية على الأحزمة الجغرافية</h3>
+    <p class="page-desc" style="margin:0;">لربط كل قرية أو منطقة بحزام جغرافي محدد لحساب المسافات التقديرية.</p>
   </div>
   ${(zones && zones.length > 0) || (fares && fares.length > 0) ? `
-  <button class="small danger" onclick="clearAllPricingData()" style="padding:8px 14px;font-weight:bold;">
-    🗑️ مسح كل البيانات والبدء من جديد
+  <button class="small danger" onclick="clearAllPricingData()" style="padding:6px 12px;font-weight:bold;">
+    🗑️ مسح كل القرى الفردية
   </button>` : ''}
 </div>
 
-${(!zones || zones.length === 0) ? `
-<div style="background:#ecfdf5;border:1px solid #6ee7b7;padding:16px 20px;border-radius:12px;margin-bottom:20px;display:flex;align-items:center;gap:12px;">
-  <span style="font-size:26px;">✨</span>
-  <div>
-    <b style="color:#065f46;display:block;font-size:15px;margin-bottom:2px;">تم مسح جميع البيانات القديمة بنجاح!</b>
-    <span style="color:#047857;font-size:13px;">الصفحة فاضية وجاهزة 100% عشان تبدأ تدخل قرى ومناطق العياط وأسعارها بإيدك من الفورم بالأسفل 👇</span>
-  </div>
-</div>` : ''}
-
-<h2>📍 1. إضافة القرى والمناطق</h2>
 <form class="bar" onsubmit="return addZone(event, this)">
   <label>اسم القرية / المنطقة</label><input name="name" required placeholder="مثال: برنشت، المتانيا، العياط المحطة" style="width:200px">
   <label>أسماء بديلة (افصل بفاصلة)</label><input name="aliases" placeholder="مثال: المحطة, الموقف, السكة" style="width:220px">
@@ -1052,7 +1236,8 @@ ${(zones ?? []).map((z: any) => `<tr>
 </tr>`).join('') || '<tr><td colspan="5" class="muted" style="text-align:center;padding:24px;">لسه ما ضفتش أي قرية أو منطقة — ضيف أول قرية أو منطقة من الفورم فوق 👆</td></tr>'}
 </table>
 
-<h2 style="margin-top:28px;">💰 2. تسعير المشوار الثابت (من قرية إلى قرية / مكان)</h2>
+<h3 style="margin-top:28px;margin-bottom:8px;">💰 3. تسعير المشوار الثابت (بين قريتين محددتين)</h3>
+<p class="page-desc" style="margin-top:0;">تحديد سعر ثابت لمسار مخصص بين نقطتين محددتين (يلغي التسعيرة العامة للحزام إذا وُجد).</p>
 ${zones && zones.length >= 2 ? `
 <form class="bar" onsubmit="return addFare(event, this)">
   <label>من</label><select name="from_zone_id" required>${zoneOptions}</select>
@@ -1077,6 +1262,80 @@ ${(fares ?? []).map((f: any) => `<tr>
 </tr>`).join('') || '<tr><td colspan="5" class="muted" style="text-align:center;padding:24px;">ما فيش أسعار مسجلة لسه — بمجرد إضافة قريتين هتقدر تثبت سعر المشوار بينهم.</td></tr>'}
 </table>`;
     pageJs = `
+function openEditZoneModal(item) {
+  document.getElementById('edit_zone_id').value = item.id;
+  document.getElementById('edit_zone_name').value = item.name || '';
+  document.getElementById('edit_zone_icon').value = item.icon || '📍';
+  document.getElementById('edit_zone_base_price').value = item.base_price || 0;
+  document.getElementById('edit_zone_return_price').value = item.return_price || 0;
+  document.getElementById('edit_zone_description').value = item.description || '';
+  document.getElementById('editModalTitle').textContent = '✏️ تعديل تسعيرة: ' + (item.name || '');
+  document.getElementById('editZoneModal').style.display = 'flex';
+}
+
+function toggleAddCategoryModal() {
+  const m = document.getElementById('addZoneModal');
+  m.style.display = m.style.display === 'flex' ? 'none' : 'flex';
+}
+
+async function submitEditZone(ev) {
+  ev.preventDefault();
+  const f = ev.target;
+  const id = +f.id.value;
+  const base_price = +f.base_price.value;
+  const return_price = +f.return_price.value;
+  const description = f.description.value;
+  const name = f.name.value;
+  const icon = f.icon.value;
+  await api('zone_pricing.edit', { id, base_price, return_price, description, name, icon });
+  document.getElementById('editZoneModal').style.display = 'none';
+  return false;
+}
+
+async function submitAddZone(ev) {
+  ev.preventDefault();
+  const f = ev.target;
+  await api('zone_pricing.add', {
+    name: f.name.value,
+    icon: f.icon.value || '📍',
+    base_price: +f.base_price.value,
+    return_price: +f.return_price.value || 0,
+    description: f.description.value || ''
+  });
+  document.getElementById('addZoneModal').style.display = 'none';
+  return false;
+}
+
+function toggleZoneActive(id, curState) {
+  const newState = curState === 1 ? 0 : 1;
+  api('zone_pricing.toggle', { id, is_active: newState });
+}
+
+function delZoneCategory(id, name) {
+  if (confirm('هل أنت متأكد من حذف فئة "' + name + '" من تسعيرة المناطق؟')) {
+    api('zone_pricing.del', { id });
+  }
+}
+
+function resetDefaultPricing() {
+  if (confirm('هل تريد إعادة ضبط تسعيرة المناطق إلى الفئات الـ 5 المعتمدة (داخل العياط 40، ريفية 70، مدينة 240، مطار القاهرة 550، مشوار خاص 450)؟')) {
+    api('zone_pricing.reset', {});
+  }
+}
+
+async function previewWhatsAppPricing() {
+  const modal = document.getElementById('waPreviewModal');
+  const box = document.getElementById('waPreviewContent');
+  modal.style.display = 'flex';
+  box.textContent = '⏳ جاري استخراج معاينة رسالة الواتساب...';
+  const res = await postApi('zone_pricing.preview', {});
+  if (res && res.preview) {
+    box.textContent = res.preview;
+  } else {
+    box.textContent = 'تعذر تحميل المعاينة.';
+  }
+}
+
 function addFare(ev, f) {
   ev.preventDefault();
   return api('fare.add', { from_zone_id: +f.from_zone_id.value, to_zone_id: +f.to_zone_id.value, price: +f.price.value, note: f.note.value });
@@ -1104,6 +1363,7 @@ function clearAllPricingData() {
     api('pricing.clearAll', {});
   }
 }
+
 `;
   } else if (page === 'drivers') {
     const { results: drivers } = await env.DB.prepare(
@@ -2050,6 +2310,50 @@ export async function adminApi(request: Request, env: Env, action: string): Prom
         await env.DB.prepare(`DELETE FROM fixed_fares`).run();
         await env.DB.prepare(`DELETE FROM zones`).run();
         return Response.json({ ok: true });
+      }
+
+      // ─── جدول تسعيرة فئات المناطق الديناميكية ───
+      case 'zone_pricing.edit': {
+        const id = Number(body.id);
+        const basePrice = Number(body.base_price);
+        const returnPrice = body.return_price !== undefined ? Number(body.return_price) : undefined;
+        const desc = body.description !== undefined ? String(body.description) : undefined;
+        const name = body.name !== undefined ? String(body.name) : undefined;
+        const icon = body.icon !== undefined ? String(body.icon) : undefined;
+        const isActive = body.is_active !== undefined ? Number(body.is_active) : undefined;
+        const ok = await updateZonePrice(env.DB, id, basePrice, returnPrice, desc, name, icon, isActive);
+        return Response.json({ ok });
+      }
+      case 'zone_pricing.toggle': {
+        const id = Number(body.id);
+        const isActive = Number(body.is_active);
+        await env.DB.prepare(`UPDATE zone_pricing SET is_active = ?, updated_at = datetime('now') WHERE id = ?`).bind(isActive, id).run();
+        return Response.json({ ok: true });
+      }
+      case 'zone_pricing.add': {
+        const id = await addZonePriceCategory(env.DB, {
+          category_key: String(body.category_key || `custom_${Date.now()}`),
+          name: String(body.name || 'فئة جديدة'),
+          icon: String(body.icon || '📍'),
+          base_price: Number(body.base_price || 50),
+          return_price: Number(body.return_price || 0),
+          description: String(body.description || ''),
+        });
+        return Response.json({ ok: Boolean(id), id });
+      }
+      case 'zone_pricing.del': {
+        const id = Number(body.id);
+        const ok = await deleteZonePriceCategory(env.DB, id);
+        return Response.json({ ok });
+      }
+      case 'zone_pricing.reset': {
+        const ok = await resetDefaultZonePricing(env.DB);
+        return Response.json({ ok });
+      }
+      case 'zone_pricing.preview': {
+        const items = await getDynamicZonePricing(env.DB);
+        const text = formatZonePricingForWhatsApp(items);
+        return Response.json({ ok: true, preview: text });
       }
 
       // ─── إعدادات ───
