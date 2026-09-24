@@ -181,6 +181,51 @@ function archiveSession(reason) {
     return null;
   }
 }
+
+// ─── أخذ لقطة ذرية متسقة لكامل ملفات الجلسة (Signal keys + creds + app state) ───
+function snapshotSession(label = 'stable') {
+  try {
+    if (!existsSync(SESSION_DIR)) return null;
+    const credsPath = join(SESSION_DIR, 'creds.json');
+    if (!existsSync(credsPath)) return null;
+    const creds = JSON.parse(readFileSync(credsPath, 'utf8'));
+    if (!creds?.registered) return null;
+
+    mkdirSync(BACKUP_DIR, { recursive: true });
+    const snapDir = join(BACKUP_DIR, `snapshot-${label}`);
+    const tempDir = join(BACKUP_DIR, `snapshot-${label}-tmp-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+    cpSync(SESSION_DIR, tempDir, { recursive: true });
+    // تبديل ذري: استبدال المجلد كاملاً بعد اكتمال النسخ
+    rmSync(snapDir, { recursive: true, force: true });
+    renameSync(tempDir, snapDir);
+    log.info({ snapDir }, 'atomic full-auth-state snapshot created');
+    return snapDir;
+  } catch (e) {
+    log.warn({ err: String(e) }, 'session snapshot failed');
+    return null;
+  }
+}
+
+function restoreFromSnapshot(label = 'stable') {
+  try {
+    const snapDir = join(BACKUP_DIR, `snapshot-${label}`);
+    if (!existsSync(snapDir)) return false;
+    const snapCreds = join(snapDir, 'creds.json');
+    if (!existsSync(snapCreds)) return false;
+    const c = JSON.parse(readFileSync(snapCreds, 'utf8'));
+    if (!c?.registered) return false;
+
+    log.warn({ label }, 'restoring full session from atomic snapshot');
+    mkdirSync(SESSION_DIR, { recursive: true });
+    cpSync(snapDir, SESSION_DIR, { recursive: true });
+    return true;
+  } catch (e) {
+    log.error({ err: String(e) }, 'restore from snapshot failed');
+    return false;
+  }
+}
+
 function freshSession(reason) {
   const backup = archiveSession(reason);
   rmSync(SESSION_DIR, { recursive: true, force: true });
@@ -431,7 +476,10 @@ async function requestOneCode(s, att) {
       if (pairAttempt && pairAttempt.myGen === myGen) pairAttempt.handshakeComplete = true;
       if (pairAttempt?.fallbackTimer) { clearTimeout(pairAttempt.fallbackTimer); pairAttempt.fallbackTimer = null; }
       // أول كتابة قرص — بعد اكتمال المصافحة فقط (كل ما قبلها كان ذاكرة)
-      try { await saveCreds(); } catch (e) { log.warn({ err: String(e).slice(0, 120) }, 'saveCreds on open failed'); }
+      try {
+        await saveCreds();
+        snapshotSession('stable');
+      } catch (e) { log.warn({ err: String(e).slice(0, 120) }, 'saveCreds/snapshot on open failed'); }
       pairAttempt = null;
       state.pairingUntil = null;
       state.pairingMode = 'off';
@@ -846,6 +894,62 @@ server = createServer(async (req, res) => {
       return;
     }
 
+    // إرسال رسالة فورية عبر واتساب (المرحلة 2)
+    if (url.pathname === '/send' && req.method === 'POST') {
+      const body = await readBody(req).catch(() => null);
+      if (!body || (!body.to && !body.chat_id) || !body.text) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ ok: false, error: 'bad_request', message: 'مطلوب to و text' }));
+        return;
+      }
+      const rawTarget = String(body.to || body.chat_id || '').trim();
+      let digits = rawTarget.replace(/[^0-9]/g, '');
+      if (digits.startsWith('00')) digits = digits.slice(2);
+      if (digits.startsWith('01') && digits.length === 11) digits = '2' + digits;
+      if (!digits || digits.length < 8 || digits.length > 15) {
+        res.writeHead(400);
+        res.end(JSON.stringify({
+          ok: false,
+          error: 'invalid_phone',
+          message: 'رقم الهاتف غير صالح. يجب إدخال 8 إلى 15 رقم بمفتاح الدولة (مثال: 201030096490)'
+        }));
+        return;
+      }
+      if (!sock || state.connection !== 'connected') {
+        res.writeHead(503);
+        res.end(JSON.stringify({ ok: false, error: 'disconnected', message: 'بوابة واتساب غير متصلة حالياً' }));
+        return;
+      }
+      const targetJid = `${digits}@s.whatsapp.net`;
+      try {
+        const resp = await sock.sendMessage(resolveJid(targetJid), { text: String(body.text) });
+        const waId = resp?.key?.id;
+        log.info({ waId, to: maskPhone(digits) }, 'direct send ok');
+        // تسجيل الرسالة الصادرة في قاعدة البيانات
+        await worker('/api/internal/log-message', 'POST', {
+          direction: 'out',
+          chat_id: targetJid,
+          sender_phone: 'ADMIN',
+          text: String(body.text),
+          intent: 'DIRECT_SEND'
+        }).catch(() => {});
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true, id: waId, to: maskPhone(digits) }));
+      } catch (err) {
+        log.error({ err: String(err) }, 'direct send failed');
+        await worker('/api/internal/log-message', 'POST', {
+          direction: 'out',
+          chat_id: targetJid,
+          sender_phone: 'ADMIN',
+          text: `${String(body.text)} [⚠️ فشل الإرسال: ${String(err)}]`,
+          intent: 'FAILED'
+        }).catch(() => {});
+        res.writeHead(500);
+        res.end(JSON.stringify({ ok: false, error: 'send_failed', details: String(err) }));
+      }
+      return;
+    }
+
     // حالة الاتصال + QR الحالي
     if (url.pathname === '/status') {
       res.writeHead(200);
@@ -1026,21 +1130,43 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   });
 }
 
-// الإقلاع: جلسة مكتملة فعلاً → إعادة اتصال. جلسة ناقصة (registered بلا مصافحة) → عزل فوري. لا جلسة → انتظار الزر.
-// بلا await مجرّد — أي فشل يُسجل ويُعاد بهدوء (لا exit → لا restart loop)
+// الإقلاع: جلسة مكتملة فعلاً → إعادة اتصال. فحص سلامة الجلسة واستعادتها من Snapshot الذري إذا تضررت
 {
   let _bootCreds = null;
-  try { _bootCreds = JSON.parse(readFileSync(join(SESSION_DIR, 'creds.json'), 'utf8')); } catch {}
+  const credsPath = join(SESSION_DIR, 'creds.json');
+  try {
+    if (existsSync(credsPath)) {
+      _bootCreds = JSON.parse(readFileSync(credsPath, 'utf8'));
+    }
+  } catch (e) {
+    log.warn({ err: String(e) }, 'creds.json unreadable or corrupted');
+  }
+
+  if (!_bootCreds?.registered) {
+    // محاولة استعادة من Snapshot ذري متسق إذا وُجد
+    if (restoreFromSnapshot('stable')) {
+      try { _bootCreds = JSON.parse(readFileSync(credsPath, 'utf8')); } catch {}
+      if (_bootCreds?.registered) {
+        log.info('session successfully recovered from atomic stable snapshot');
+      }
+    }
+  }
+
   if (_bootCreds?.registered) {
     wantConnection = true;
     state.lastError = null;
-    console.log('📂 جلسة مسجلة موجودة — إعادة اتصال تلقائية وحفظ الجلسة');
+    console.log('📂 جلسة مسجلة صالحة وموثقة — إعادة اتصال تلقائية');
     startWhatsApp().catch((e) => {
       state.lastError = String(e);
       log.error({ err: String(e) }, 'startup failed');
     });
   } else {
-    console.log('⏸ لا جلسة مسجلة — بانتظار زر البدء من اللوحة (5 دقائق لكل ضغطة)');
+    if (process.env.SESSION_DIR && !existsSync(credsPath)) {
+      state.lastError = '⚠️ مجلد Persistent Disk فارغ أو غير متصل — يرجى بدء طلب اقتران جديد من لوحة الإدارة';
+      console.log('⚠️ SESSION_DIR محدد لكنه فارغ — يتطلب طلب اقتران جديد من لوحة الإدارة');
+    } else {
+      console.log('⏸ لا جلسة مسجلة — بانتظار زر البدء من اللوحة (5 دقائق لكل ضغطة)');
+    }
   }
 }
 outboxLoop();

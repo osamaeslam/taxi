@@ -34,7 +34,7 @@ function normToChat(to: string): string {
   return d + '@s.whatsapp.net';
 }
 
-const GATEWAY_URL = process.env.GATEWAY_URL || 'http://127.0.0.1:3010';
+const GATEWAY_URL = process.env.WHATSAPP_GATEWAY_URL || process.env.WHATSAPP_SERVER_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:3010';
 
 /** حالة البوابة من خادم البوت (QR/كود اقتران) — null إذا غير متاح */
 async function gatewayStatus(adminKey: string): Promise<Record<string, any> | null> {
@@ -54,7 +54,8 @@ async function gatewayStatus(adminKey: string): Promise<Record<string, any> | nu
 const NAV: Array<{ id: string; href: string; label: string }> = [
   { id: 'home', href: '/', label: '🏠 الرئيسية' },
   { id: 'attendance', href: '/admin/attendance', label: '🟢 رادار الحضور والركوب' },
-  { id: 'shuttle', href: '/admin/shuttle', label: '🎓 خطوط وباصات الجامعات' },
+  { id: 'lines-react', href: '/lines', label: '🎓 خطوط الجامعات (React)' },
+  { id: 'shuttle', href: '/admin/shuttle', label: '🚌 باصات وحجوزات اليوم' },
   { id: 'clients', href: '/admin/clients', label: '👥 دليل العملاء والركاب' },
   { id: 'rides', href: '/admin/rides', label: '🧾 المشاوير والتفاوض' },
   { id: 'drivers', href: '/admin/drivers', label: '🚗 كباتن وسيارات العياط' },

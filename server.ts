@@ -1,4 +1,6 @@
 import express from 'express';
+import path from 'path';
+import fs from 'fs';
 import worker from './src/worker.js';
 import { getDatabase } from './src/db.js';
 import { runSupervisor } from './src/supervisor.js';
@@ -26,6 +28,20 @@ app.use(express.static('public', {
     }
   }
 }));
+
+// Static client bundle from Vite build
+if (fs.existsSync(path.resolve(process.cwd(), 'dist'))) {
+  app.use(express.static('dist'));
+}
+
+// React UniversityLinesManager SPA route
+app.get(['/lines', '/lines-manager', '/manager', '/app'], (req, res) => {
+  const distIndex = path.resolve(process.cwd(), 'dist/index.html');
+  if (fs.existsSync(distIndex)) {
+    return res.sendFile(distIndex);
+  }
+  res.sendFile(path.resolve(process.cwd(), 'index.html'));
+});
 
 const { d1 } = getDatabase();
 
@@ -83,7 +99,8 @@ if (!process.env.VERCEL) {
 app.all('/api/gateway/*', async (req, res) => {
   const targetPath = req.path.replace(/^\/api\/gateway/, '');
   const query = req.url.includes('?') ? '?' + req.url.split('?')[1] : '';
-  const gatewayUrl = `http://127.0.0.1:3010${targetPath}${query}`;
+  const baseGwUrl = (process.env.WHATSAPP_GATEWAY_URL || process.env.WHATSAPP_SERVER_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:3010').replace(/\/+$/, '');
+  const gatewayUrl = `${baseGwUrl}${targetPath}${query}`;
   try {
     const adminKey = env.ADMIN_KEY;
     const bodyData = ['GET', 'HEAD'].includes(req.method)
@@ -97,6 +114,7 @@ app.all('/api/gateway/*', async (req, res) => {
         'x-gateway-token': adminKey,
       },
       body: bodyData,
+      signal: AbortSignal.timeout(8000),
     });
     const data = await gRes.text();
     res.status(gRes.status);
@@ -107,7 +125,13 @@ app.all('/api/gateway/*', async (req, res) => {
     });
     res.send(data);
   } catch (err: any) {
-    res.status(502).json({ error: 'Gateway offline', details: err?.message });
+    res.status(502).json({
+      ok: false,
+      error: 'Gateway offline',
+      details: err?.message,
+      connection: 'disconnected',
+      hint: 'إذا كنت تستخدم Vercel أو بيئة Serverless، يرجى تشغيل Gateway على سيرفر دائم (مثل Render/Railway) وضبط متغير البيئة WHATSAPP_GATEWAY_URL'
+    });
   }
 });
 

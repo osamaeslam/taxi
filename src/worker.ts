@@ -137,6 +137,27 @@ export default {
       return json({ ok: true, acked: ids.length });
     }
 
+    // ─── تسجيل رسالة مباشرة في جدول الرسائل messages ───
+    if (request.method === 'POST' && path === '/api/internal/log-message') {
+      if (!(await checkGatewayAuth(request, env))) return json({ error: 'unauthorized' }, 401);
+      const body = await request.json<{
+        direction?: 'in' | 'out';
+        chat_id: string;
+        sender_phone?: string;
+        text: string;
+        intent?: string;
+      }>();
+      if (!body?.chat_id || !body?.text) return json({ error: 'chat_id and text required' }, 400);
+      await repo.logMessage(env.DB, {
+        direction: body.direction || 'out',
+        chat_id: body.chat_id,
+        sender_phone: body.sender_phone || body.chat_id.split('@')[0],
+        text: body.text,
+        intent: body.intent || 'DIRECT_SEND',
+      });
+      return json({ ok: true });
+    }
+
     // ─── مسارات PWA والأيقونات وملف التثبيت كأيقونة مستقلة WebAPK ───
     if (path === '/manifest.json' || path === '/manifest.webmanifest') {
       try {
@@ -221,7 +242,8 @@ export default {
     // ─── مسارات وسيط بوابة واتساب (WhatsApp Gateway Proxy) ───
     if (path.startsWith('/api/gateway/')) {
       const targetPath = path.slice('/api/gateway'.length);
-      const gwUrl = `http://127.0.0.1:3010${targetPath}${url.search}`;
+      const baseGwUrl = (process.env.WHATSAPP_GATEWAY_URL || process.env.WHATSAPP_SERVER_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:3010').replace(/\/+$/, '');
+      const gwUrl = `${baseGwUrl}${targetPath}${url.search}`;
       try {
         const bodyText = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.text();
         const gRes = await fetch(gwUrl, {
@@ -231,6 +253,7 @@ export default {
             'x-gateway-token': env.ADMIN_KEY,
           },
           body: bodyText,
+          signal: AbortSignal.timeout(8000),
         });
         const respText = await gRes.text();
         return new Response(respText, {
@@ -240,7 +263,13 @@ export default {
           },
         });
       } catch (err: any) {
-        return Response.json({ error: 'Gateway offline', details: err?.message }, { status: 502 });
+        return Response.json({
+          ok: false,
+          error: 'Gateway offline',
+          details: err?.message,
+          connection: 'disconnected',
+          hint: 'إذا كنت تستخدم Vercel أو بيئة Serverless، يرجى تشغيل Gateway على خادم دائم (مثل Render أو Railway) وضبط متغير البيئة WHATSAPP_GATEWAY_URL'
+        }, { status: 502 });
       }
     }
 

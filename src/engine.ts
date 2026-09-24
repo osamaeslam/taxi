@@ -35,8 +35,27 @@ export async function handleMessage(env: Env, msg: InboundMessage): Promise<Outb
     return handleGroupMessage(env, msg);
   }
 
-  // 2. Check if the sender is an authorized driver
-  const driver = await db.prepare(`SELECT * FROM drivers WHERE phone = ? AND active = 1`).bind(msg.senderPhone).first<any>();
+  // 2. Check if the sender is an authorized driver (taxi or university shuttle)
+  const cleanPhone = msg.senderPhone.replace(/[^0-9]/g, '');
+  const localPhone = cleanPhone.startsWith('20') ? '0' + cleanPhone.slice(2) : cleanPhone;
+  const intlPhone = cleanPhone.startsWith('01') ? '20' + cleanPhone.slice(1) : cleanPhone;
+
+  let driver = await db.prepare(`
+    SELECT * FROM drivers 
+    WHERE (phone = ? OR phone = ? OR phone = ?) AND active = 1
+  `).bind(msg.senderPhone, localPhone, intlPhone).first<any>();
+
+  if (!driver) {
+    const shuttleDriver = await db.prepare(`
+      SELECT driver_name as name, driver_phone as phone, 0 as id, 'AVAILABLE' as status 
+      FROM shuttle_vehicles 
+      WHERE driver_phone = ? OR driver_phone = ? OR driver_phone = ?
+    `).bind(msg.senderPhone, localPhone, intlPhone).first<any>();
+    if (shuttleDriver) {
+      driver = shuttleDriver;
+    }
+  }
+
   if (driver) {
     const driverReply = await handleDriverCommand(env, driver, rawText, msg);
     if (driverReply) return driverReply;
@@ -511,17 +530,22 @@ async function handleShuttleMessage(env: Env, msg: InboundMessage): Promise<Outb
     const vehicles = await getShuttleVehicles(db);
     const assignedVehicle = vehicles.find((v) => v.id === bookResult.vehicleId);
 
+    const ticketCode = bookResult.ticketCode || ('EZZ-' + (1000 + (bookResult.bookingId || 1)));
+
     let confirmMsg = `✅ *تم تأكيد حجز مقعدك الجامعي بنجاح!*\n`;
     confirmMsg += `━━━━━━━━━━━━━━━━━━━━\n`;
     confirmMsg += `🎓 الوجهة: *${lineName}*\n`;
-    confirmMsg += `🚗 السيارة: *${assignedVehicle?.vehicle_name || 'عربية 1 (تويوتا 14 راكب)'}*\n`;
+    confirmMsg += `🎫 كود التذكرة: *${ticketCode}*\n`;
+    confirmMsg += `🚐 الباص / السيارة: *${assignedVehicle?.vehicle_name || 'عربية 1 (تويوتا 14 راكب)'}*\n`;
     confirmMsg += `👤 الكابتن: *${assignedVehicle?.driver_name || 'كابتن محمود الهواري'}* (${assignedVehicle?.driver_phone || '01011223344'})\n`;
-    confirmMsg += `📍 نقطة الركوب: موقف العياط الرئيسي أو مدخل قريتك\n`;
+    confirmMsg += `📍 نقطة الركوب: موقف العياط ومداخل القرى\n`;
     confirmMsg += `⏰ موعد التحرك: الساعة 6:15 صباحاً\n`;
     confirmMsg += `🔁 نوع الحجز: ${dirLabel}\n`;
-    confirmMsg += `💺 مقاعدك المحجوزة: مقعد 1 مؤكد\n`;
     confirmMsg += `━━━━━━━━━━━━━━━━━━━━\n`;
-    confirmMsg += `💡 *ملاحظة:* في حال طرأ أي ظرف واعتذرت عن الحضور، يُرجى إرسال «*اعتذار*» قبل 5:30 ص لتوفير مقعدك لزميل آخر.`;
+    confirmMsg += `🔗 *رابط تذكرتك الذكية وتأكيد الحضور الحي:*\n`;
+    confirmMsg += `/ticket/${ticketCode}\n\n`;
+    confirmMsg += `📲 *عند صعودك الباص:*\nاضغط على زر «أنا ركبت الباص 🟢» داخل الرابط أو أرسل كلمة «*ركبت*» هنا في أي وقت لتسجيل حضورك فورياً عند الكابتن!\n`;
+    confirmMsg += `💡 للاعتذار عن الرحلة: اكتب «*اعتذار*» قبل 5:30 ص.`;
 
     return [{ chatId: msg.chatId, text: confirmMsg }];
   }
@@ -536,13 +560,43 @@ async function handleDriverCommand(env: Env, driver: any, text: string, msg: Inb
   const db = env.DB;
   const lower = text.toLowerCase();
 
+  // Driver marks student boarded: ركب 1001 أو ركب EZZ-1001 أو حضر 010...
+  const boardMatch = text.match(/(?:ركب|حضر|ركوب|تسجيل)\s*(?:طالب|الطالب)?\s*#?([A-Za-z0-9\-]+)/i);
+  if (boardMatch) {
+    const identifier = boardMatch[1].trim();
+    const boardRes = await markBoardedByCodeOrPhone(db, identifier);
+    if (boardRes.ok && boardRes.booking) {
+      const b = boardRes.booking;
+      return [{
+        chatId: msg.chatId,
+        text: `🟢 *تم تسجيل ركوب الطالب بنجاح!*\n👤 الطالب: *${b.student_name}*\n🎫 التذكرة: *${b.ticket_code || identifier}*\n🎓 الخط: ${b.line_name || ''}\n⏰ وقت التسجيل: ${new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}\nتم تحديث الكشف المباشر ورادار الحضور. 👍`,
+      }];
+    }
+  }
+
   // Driver requests manifest
   if (lower.includes('كشف') || lower.includes('الركاب') || lower.includes('الطلاب') || lower.includes('باصي')) {
-    const vehicle = await db.prepare(`SELECT id FROM shuttle_vehicles WHERE driver_phone = ? OR driver_name = ?`).bind(driver.phone, driver.name).first<{ id: number }>();
+    const clnP = (driver.phone || msg.senderPhone || '').replace(/[^0-9]/g, '');
+    const locP = clnP.startsWith('20') ? '0' + clnP.slice(2) : clnP;
+    const intP = clnP.startsWith('01') ? '20' + clnP.slice(1) : clnP;
+    const vehicle = await db.prepare(`
+      SELECT id FROM shuttle_vehicles 
+      WHERE driver_phone = ? OR driver_phone = ? OR driver_phone = ? OR driver_name = ?
+    `).bind(clnP, locP, intP, driver.name).first<{ id: number }>();
     if (vehicle) {
       const manifest = await generateDriverManifest(db, vehicle.id);
       return [{ chatId: msg.chatId, text: manifest }];
+    } else {
+      return [{ chatId: msg.chatId, text: `📋 لم يتم تعيين سيارة محددة لرقمك اليوم. يرجى مراجعة إدارة كابتن عز.` }];
     }
+  }
+
+  // Driver requests Live Attendance Radar link
+  if (lower.includes('رادار') || lower.includes('حضور') || lower.includes('شاشة الحضور')) {
+    return [{
+      chatId: msg.chatId,
+      text: `🟢 *رادار الحضور والركوب المباشر لكباتن ومشرفي العياط:*\nيمكنك متابعة وتأكيد ركوب الطلاب بنقرة واحدة من شاشة الموبايل:\n/admin/attendance`,
+    }];
   }
 
   // Driver status: متاح / مشغول

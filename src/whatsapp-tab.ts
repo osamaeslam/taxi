@@ -94,6 +94,64 @@ export function whatsappTabHtml(props: WhatsAppTabProps): string {
   </div>
 </div>
 
+<!-- المرحلة 2 و 4: الإرسال المباشر وقوالب الرسائل -->
+<div class="box" style="margin-bottom:16px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <h3 style="margin:0;display:flex;align-items:center;gap:8px;">
+      <span>📤 إرسال رسالة واتساب مباشرة وقوالب الإشعارات (المرحلة 2 و 4)</span>
+    </h3>
+    <span style="font-size:12px;background:#e0f2fe;color:#0369a1;padding:4px 10px;border-radius:12px;font-weight:bold;">
+      Vercel / API ➡️ Gateway ➡️ Baileys ➡️ WhatsApp
+    </span>
+  </div>
+  <p style="font-size:13px;color:var(--muted);margin-top:0;">
+    يمكنك إرسال إشعار فوري لأي عميل أو سائق مباشرة عبر رقم الهاتف أو استخدام أحد القوالب التلقائية:
+  </p>
+
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+    <button type="button" class="small btn" onclick="applyTemplate('approved')" style="background:#f0fdf4;border:1px solid #86efac;color:#166534;">✅ تم اعتماد الطلب</button>
+    <button type="button" class="small btn" onclick="applyTemplate('shuttle')" style="background:#eff6ff;border:1px solid #93c5fd;color:#1e40af;">🎓 تأكيد حجز باص الجامعة</button>
+    <button type="button" class="small btn" onclick="applyTemplate('driver_assigned')" style="background:#fefce8;border:1px solid #fde047;color:#854d0e;">🚗 إشعار تعيين كابتن</button>
+    <button type="button" class="small btn" onclick="applyTemplate('custom')" style="background:#f8fafc;border:1px solid var(--line);color:var(--ink);">✏️ رسالة مخصصة</button>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;">
+    <div>
+      <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">رقم المستلم (مع كود الدولة):</label>
+      <input type="tel" id="direct-send-phone" placeholder="مثال: 201030096490" value="201030096490" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;box-sizing:border-box;">
+      
+      <div style="margin-top:10px;font-size:12px;color:var(--muted);background:var(--tab-bg);padding:8px 10px;border-radius:6px;">
+        💡 <b>ملاحظة التوجيه الآلي:</b> أرقام الفروع والمشرفين يتم سحبها آلياً من قاعدة البيانات بدون كشفها في المتصفح.
+      </div>
+    </div>
+    <div>
+      <label style="display:block;font-size:13px;font-weight:bold;margin-bottom:4px;">نص الرسالة:</label>
+      <textarea id="direct-send-text" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;box-sizing:border-box;resize:vertical;" placeholder="اكتب نص الرسالة هنا...">تم اعتماد طلبك بنجاح ✅
+الكود: C-1025
+الخدمة: كابتن عز لخدمات النقل الذكي
+يمكنك متابعة خط الرحلة من خلال الرابط المرسل إليك.</textarea>
+      
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+        <span id="directSendStatus" style="font-size:13px;font-weight:bold;"></span>
+        <button type="button" id="btnDirectSend" class="btn" onclick="sendDirectMessage()" style="background:var(--accent);color:#fff;font-weight:bold;padding:10px 20px;border-radius:8px;cursor:pointer;">
+          🚀 إرسال الرسالة الآن
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="box" style="margin-bottom:16px;background:var(--tab-bg);border:1px solid var(--line);border-radius:12px;padding:14px;">
+  <h4 style="margin:0 0 6px 0;display:flex;align-items:center;gap:6px;">
+    <span>🛡️ حالة استقرار المعمارية وتخزين الجلسة (Session Architecture)</span>
+  </h4>
+  <div style="font-size:12.5px;color:var(--muted);line-height:1.6;">
+    • <b>نظام التشغيل:</b> يدعم التشغيل المدمج المستمر (Node.js Process) أو التوجيه لسيرفر Gateway خارجي (Render / Railway / VPS) عبر <code>WHATSAPP_GATEWAY_URL</code>.<br>
+    • <b>حفظ الجلسة:</b> يتم حفظ مفاتيح مصادقة Baileys في مجلد <code>gateway/session</code> مع نسخ احتياطي دوري في <code>session-backups</code> لتفادي فقدان المصادقة عند أي إعادة تشغيل.<br>
+    • <b>الأمان:</b> مفاتيح الجلسة ورموز الاقتران محمية بـ HTTP Header مشفر <code>x-gateway-token</code> ولا تتسرب أبداً لواجهة العميل.
+  </div>
+</div>
+
 <script>
 let statusPollTimer = null;
 
@@ -247,6 +305,75 @@ function updateUiWithStatus(data) {
     qrBox.innerHTML = '<div style="background:#fff;padding:12px;display:inline-block;border-radius:10px;border:1px solid var(--line);box-shadow:0 2px 8px rgba(0,0,0,0.05);">' +
       '<img src="' + data.qr + '" alt="QR Code" style="width:190px;height:190px;display:block;">' +
       '</div>';
+  }
+}
+
+function applyTemplate(type) {
+  const txtArea = document.getElementById('direct-send-text');
+  if (!txtArea) return;
+  if (type === 'approved') {
+    txtArea.value = 'تم اعتماد طلبك بنجاح ✅\\nالعميل: محمد إبراهيم\\nالكود: C-1025\\nالفرع: العياط\\nيمكنك متابعة تفاصيل الرحلة من خلال رابط التتبع.';
+  } else if (type === 'shuttle') {
+    txtArea.value = 'تم تأكيد حجز مقعدك في باص الجامعة 🎓\\nالجامعة: جامعة القاهرة\\nالمقعد: #04\\nوقت الانطلاق: 07:00 صباحاً\\nالمكان: موقف العياط الرئيسي.';
+  } else if (type === 'driver_assigned') {
+    txtArea.value = 'إشعار كابتن الرحلة 🚗\\nتم إسناد مشوار جديد إليك\\nمن: موقف العياط ⬅️ إلى: جامعة القاهرة\\nالسعر المتفق عليه: 250 جنيه\\nيرجى التوجه لنقطة الانطلاق.';
+  } else {
+    txtArea.value = '';
+    txtArea.focus();
+  }
+}
+
+async function sendDirectMessage() {
+  const phoneInput = document.getElementById('direct-send-phone');
+  const textInput = document.getElementById('direct-send-text');
+  const statusEl = document.getElementById('directSendStatus');
+  const btn = document.getElementById('btnDirectSend');
+  
+  const to = normalizePhone(phoneInput ? phoneInput.value.trim() : '');
+  const text = textInput ? textInput.value.trim() : '';
+
+  if (!to || to.length < 8) {
+    alert('يرجى كتابة رقم هاتف صالح بمفتاح الدولة');
+    return;
+  }
+  if (!text) {
+    alert('يرجى كتابة نص الرسالة');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerText = '⏳ جاري الإرسال...';
+  if (statusEl) {
+    statusEl.style.color = '#d97706';
+    statusEl.innerText = 'جاري الإرسال عبر البوابة...';
+  }
+
+  try {
+    const res = await fetch('/api/gateway/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to, text })
+    });
+    const d = await res.json();
+    if (res.ok && d.ok) {
+      if (statusEl) {
+        statusEl.style.color = '#0e7c66';
+        statusEl.innerText = '✅ تم إرسال الرسالة بنجاح إلى ' + (d.to || to) + (d.id ? ' (معرف: ' + d.id + ')' : '');
+      }
+    } else {
+      if (statusEl) {
+        statusEl.style.color = '#c0392b';
+        statusEl.innerText = '❌ فشل الإرسال: ' + (d.message || d.error || 'خطأ غير معروف');
+      }
+    }
+  } catch (err) {
+    if (statusEl) {
+      statusEl.style.color = '#c0392b';
+      statusEl.innerText = '❌ خطأ بالاتصال: ' + err.message;
+    }
+  } finally {
+    btn.disabled = false;
+    btn.innerText = '🚀 إرسال الرسالة الآن';
   }
 }
 

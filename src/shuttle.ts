@@ -308,9 +308,11 @@ export async function generateDriverManifest(db: D1Database, vehicleId: number, 
   list.forEach((b, idx) => {
     const payLabel = b.payment_method === 'subscription' ? '✅ اشتراك' : (b.paid_status === 'paid' ? '💵 مسدد كاش' : '⏳ كاش عند الركوب');
     const dirLabel = b.direction === 'round' ? 'ذهاب وعودة' : (b.direction === 'one_way_go' ? 'ذهاب فقط' : 'عودة فقط');
-    text += `${idx + 1}. *${b.student_name}* (${b.seats_count} مقعد) - ${dirLabel}\n`;
-    text += `   📍 الركوب: ${b.pickup_location} ⬅️ ${b.dropoff_location}\n`;
-    text += `   📞 ${b.student_phone} | ${payLabel}\n`;
+    const tCode = b.ticket_code || ('EZZ-' + (1000 + b.id));
+    const boardLabel = b.boarded === 1 ? `🟢 ركب (${b.boarded_at || 'حاضر'})` : '🔴 لم يركب بعد';
+    text += `${idx + 1}. *${b.student_name}* [${tCode}] — ${boardLabel}\n`;
+    text += `   📍 نقطة الركوب: ${b.pickup_location} ⬅️ ${b.dropoff_location}\n`;
+    text += `   📞 هاتف: ${b.student_phone} | ${payLabel} | ${dirLabel}\n`;
   });
 
   text += `────────────────────\n`;
@@ -541,5 +543,96 @@ export async function generateRidesCsv(db: D1Database): Promise<string> {
   }
 
   return csv;
+}
+
+export async function getAllShuttleLines(db: D1Database): Promise<ShuttleLine[]> {
+  const res = await db.prepare('SELECT * FROM shuttle_lines ORDER BY active DESC, id ASC').all<ShuttleLine>();
+  return res.results || [];
+}
+
+export async function createShuttleLine(
+  db: D1Database,
+  line: {
+    name: string;
+    pickup_point?: string;
+    destination?: string;
+    departure_time?: string;
+    return_time?: string;
+    one_way_price?: number;
+    round_trip_price?: number;
+    active?: number;
+  }
+): Promise<number> {
+  const res = await db.prepare(`
+    INSERT INTO shuttle_lines (name, pickup_point, destination, departure_time, return_time, one_way_price, round_trip_price, active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    line.name,
+    line.pickup_point || 'المسجد الكبير - أول البلد',
+    line.destination || line.name,
+    line.departure_time || '06:00 ص',
+    line.return_time || '03:30 م',
+    Number(line.one_way_price || 35),
+    Number(line.round_trip_price || 60),
+    line.active !== undefined ? line.active : 1
+  ).run();
+  return Number(res.meta?.last_row_id ?? 0);
+}
+
+export async function toggleShuttleLine(db: D1Database, id: number, active: number): Promise<void> {
+  await db.prepare('UPDATE shuttle_lines SET active = ? WHERE id = ?').bind(active, id).run();
+}
+
+export async function deleteShuttleLine(db: D1Database, id: number): Promise<void> {
+  await db.prepare('DELETE FROM shuttle_bookings WHERE line_id = ?').bind(id).run();
+  await db.prepare('DELETE FROM shuttle_vehicles WHERE line_id = ?').bind(id).run();
+  await db.prepare('DELETE FROM shuttle_lines WHERE id = ?').bind(id).run();
+}
+
+export async function createShuttleVehicle(
+  db: D1Database,
+  v: {
+    line_id: number;
+    vehicle_name: string;
+    plate_number?: string;
+    driver_name: string;
+    driver_phone: string;
+    seat_capacity?: number;
+  }
+): Promise<number> {
+  const res = await db.prepare(`
+    INSERT INTO shuttle_vehicles (line_id, vehicle_name, plate_number, driver_name, driver_phone, seat_capacity, status)
+    VALUES (?, ?, ?, ?, ?, ?, 'active')
+  `).bind(
+    Number(v.line_id),
+    v.vehicle_name,
+    v.plate_number || 'قيد الترخيص',
+    v.driver_name,
+    v.driver_phone,
+    Number(v.seat_capacity || 14)
+  ).run();
+  return Number(res.meta?.last_row_id ?? 0);
+}
+
+export async function deleteShuttleVehicle(db: D1Database, id: number): Promise<void> {
+  await db.prepare('UPDATE shuttle_bookings SET vehicle_id = NULL WHERE vehicle_id = ?').bind(id).run();
+  await db.prepare('DELETE FROM shuttle_vehicles WHERE id = ?').bind(id).run();
+}
+
+export async function cancelShuttleBookingById(db: D1Database, id: number): Promise<void> {
+  const b = await db.prepare("SELECT * FROM shuttle_bookings WHERE id = ?").bind(id).first<ShuttleBooking>();
+  if (!b) return;
+  await db.prepare("UPDATE shuttle_bookings SET status = 'cancelled' WHERE id = ?").bind(id).run();
+  if (b.payment_method === 'subscription') {
+    await db.prepare(`
+      UPDATE student_subscriptions 
+      SET used_trips = MAX(0, used_trips - 1) 
+      WHERE student_phone = ? AND line_id = ? AND status = 'active'
+    `).bind(b.student_phone, b.line_id).run();
+  }
+}
+
+export async function clearDayShuttleBookings(db: D1Database, date: string): Promise<void> {
+  await db.prepare('DELETE FROM shuttle_bookings WHERE booking_date = ?').bind(date).run();
 }
 
