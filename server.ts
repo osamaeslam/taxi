@@ -31,7 +31,7 @@ app.use(express.static('public', {
 
 // Static client bundle from Vite build
 if (fs.existsSync(path.resolve(process.cwd(), 'dist'))) {
-  app.use(express.static('dist'));
+  app.use(express.static('dist', { index: false }));
 }
 
 // React UniversityLinesManager SPA route
@@ -160,7 +160,13 @@ app.all('*', async (req, res) => {
       if (typeof req.body === 'string') {
         body = req.body;
       } else if (req.body && Object.keys(req.body).length > 0) {
-        body = JSON.stringify(req.body);
+        const ct = (req.headers['content-type'] || '').toLowerCase();
+        if (ct.includes('application/x-www-form-urlencoded')) {
+          body = new URLSearchParams(req.body).toString();
+        } else {
+          body = JSON.stringify(req.body);
+          headers.set('content-type', 'application/json');
+        }
       }
     }
 

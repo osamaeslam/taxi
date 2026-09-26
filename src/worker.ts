@@ -47,6 +47,19 @@ import { getDynamicZonePricing } from './pricing.js';
 import fs from 'fs';
 import path from 'path';
 
+export function normalizeDigits(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
+    .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d).toString())
+    .trim();
+}
+
+export function checkAdminAuth(req: Request, u: URL, env: Env): boolean {
+  const k = normalizeDigits(u.searchParams.get('key') ?? parseCookie(req, 'admin_key') ?? req.headers.get('Authorization')?.replace(/^Bearer\s+/i, '') ?? '');
+  return k === env.ADMIN_KEY || k === '442433' || k === 'taxi-admin-2025';
+}
+
 export default {
   async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     // المشرف الخلفي — فشله ما بيأثر ع المسار الحي أبداً
@@ -242,23 +255,32 @@ export default {
       if (request.method === 'POST') {
         let phone = '';
         let remember = true;
+        const contentType = request.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json') || request.headers.get('accept')?.includes('application/json');
+
         try {
-          const contentType = request.headers.get('content-type') || '';
-          if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
-            const formData = await request.formData();
-            phone = String(formData.get('phone') || '').trim();
-            remember = Boolean(formData.get('remember'));
-          } else {
-            const j = await request.json<any>();
-            phone = String(j.phone || '').trim();
+          const rawText = await request.text();
+          let parsed = false;
+          try {
+            const j = JSON.parse(rawText);
+            phone = String(j.phone || j.mobile || '').trim();
             remember = j.remember !== false;
+            parsed = true;
+          } catch {
+            // not json
+          }
+          if (!parsed) {
+            const params = new URLSearchParams(rawText);
+            phone = String(params.get('phone') || params.get('mobile') || '').trim();
+            remember = Boolean(params.get('remember'));
           }
         } catch {
           // ignore
         }
 
-        const cleanPhone = phone.replace(/[^0-9]/g, '');
+        const cleanPhone = normalizeDigits(phone).replace(/[^0-9]/g, '');
         if (!cleanPhone) {
+          if (isJson) return json({ ok: false, error: 'يرجى إدخال رقم الهاتف بشكل صحيح' }, 400);
           return new Response(renderDriverLoginHtml('يرجى إدخال رقم الهاتف بشكل صحيح'), { status: 400, headers: html });
         }
 
@@ -286,6 +308,11 @@ export default {
 
         if (driverRow) {
           const maxAge = remember ? 2592000 : 86400; // 30 days
+          if (isJson) {
+            return json({ ok: true, driver: driverRow, redirect: '/driver' }, 200, {
+              'Set-Cookie': `driver_phone=${cleanPhone}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+            });
+          }
           return new Response(null, {
             status: 302,
             headers: {
@@ -294,8 +321,10 @@ export default {
             },
           });
         } else {
+          const errMsg = `⚠️ عذراً، رقم الهاتف (${phone}) غير مسجل أو غير مفعل كسائق في المنظومة. يرجى التواصل مع كابتن عز أو الإدارة لإضافة رقمك وتفعيله.`;
+          if (isJson) return json({ ok: false, error: errMsg }, 401);
           return new Response(
-            renderDriverLoginHtml(`⚠️ عذراً، رقم الهاتف (${phone}) غير مسجل أو غير مفعل كسائق في المنظومة. يرجى التواصل مع كابتن عز أو الإدارة لإضافة رقمك وتفعيله.`),
+            renderDriverLoginHtml(errMsg),
             { status: 401, headers: html }
           );
         }
@@ -315,7 +344,7 @@ export default {
     // كشف رادار الحضور المخصص للسائقين
     if (path === '/attendance' || path === '/driver/attendance' || path === '/driver') {
       const phoneParam = url.searchParams.get('phone') || parseCookie(request, 'driver_phone') || '';
-      const cleanPhone = phoneParam.replace(/[^0-9]/g, '');
+      const cleanPhone = normalizeDigits(phoneParam).replace(/[^0-9]/g, '');
 
       let currentDriver: any = null;
       if (cleanPhone) {
@@ -578,6 +607,9 @@ export default {
     }
 
     if (path === '/api/export/csv') {
+      if (!checkAdminAuth(request, url, env)) {
+        return json({ error: 'غير مصرح بالوصول لقاعدة البيانات — خاص بالإدارة فقط' }, 401);
+      }
       const targetDate = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
       const csv = await generateBookingsCsv(env.DB, targetDate);
       return new Response(csv, {
@@ -591,6 +623,9 @@ export default {
     }
 
     if (path === '/api/export/rides-csv') {
+      if (!checkAdminAuth(request, url, env)) {
+        return json({ error: 'غير مصرح بالوصول لقاعدة البيانات — خاص بالإدارة فقط' }, 401);
+      }
       const csv = await generateRidesCsv(env.DB);
       return new Response(csv, {
         status: 200,
@@ -603,12 +638,18 @@ export default {
     }
 
     if (request.method === 'POST' && path === '/api/sheets/test') {
+      if (!checkAdminAuth(request, url, env)) {
+        return json({ error: 'Unauthorized' }, 401);
+      }
       const body = await request.json<any>();
       const res = await testSheetsConnection(body.url);
       return json(res);
     }
 
     if (request.method === 'POST' && path === '/api/sheets/sync-all') {
+      if (!checkAdminAuth(request, url, env)) {
+        return json({ error: 'Unauthorized' }, 401);
+      }
       const res = await syncAllBookingsAndRidesToSheets(env.DB);
       return json(res);
     }
@@ -628,11 +669,10 @@ export default {
       });
     }
 
-    // ─── تسجيل دخول وخروج الإدارة ───
-    if (path === '/admin/login') {
+    // ─── تسجيل دخول وخروج الإدارة (يدعم النموذج و الـ API JSON) ───
+    if (path === '/admin/login' || path === '/api/admin/login') {
       if (request.method === 'GET') {
-        const existingKey = url.searchParams.get('key') ?? parseCookie(request, 'admin_key');
-        if (existingKey === env.ADMIN_KEY || existingKey === '442433' || existingKey === 'taxi-admin-2025') {
+        if (checkAdminAuth(request, url, env)) {
           return Response.redirect(`${url.origin}/admin`, 302);
         }
         return new Response(renderAdminLoginHtml(), { status: 200, headers: html });
@@ -640,23 +680,42 @@ export default {
       if (request.method === 'POST') {
         let enteredKey = '';
         let remember = true;
+        const contentType = request.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json') || request.headers.get('accept')?.includes('application/json');
+
         try {
-          const contentType = request.headers.get('content-type') || '';
-          if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
-            const formData = await request.formData();
-            enteredKey = String(formData.get('admin_key') || '').trim();
-            remember = Boolean(formData.get('remember'));
-          } else {
-            const j = await request.json<any>();
-            enteredKey = String(j.admin_key || '').trim();
+          const rawText = await request.text();
+          let parsed = false;
+          try {
+            const j = JSON.parse(rawText);
+            enteredKey = String(j.admin_key || j.password || j.pin || j.key || '').trim();
             remember = j.remember !== false;
+            parsed = true;
+          } catch {
+            // not json
+          }
+          if (!parsed) {
+            const params = new URLSearchParams(rawText);
+            enteredKey = String(params.get('admin_key') || params.get('password') || params.get('pin') || params.get('key') || '').trim();
+            remember = Boolean(params.get('remember'));
           }
         } catch {
           // ignore error
         }
 
+        enteredKey = normalizeDigits(enteredKey);
+
         if (enteredKey === env.ADMIN_KEY || enteredKey === '442433' || enteredKey === 'taxi-admin-2025') {
           const maxAge = remember ? 2592000 : 86400; // 30 days or 1 day
+          if (isJson) {
+            return new Response(JSON.stringify({ success: true, ok: true, token: enteredKey, redirect: '/admin' }), {
+              status: 200,
+              headers: {
+                'content-type': 'application/json',
+                'Set-Cookie': `admin_key=${enteredKey}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+              },
+            });
+          }
           return new Response(null, {
             status: 302,
             headers: {
@@ -665,6 +724,12 @@ export default {
             },
           });
         } else {
+          if (isJson) {
+            return new Response(JSON.stringify({ success: false, ok: false, message: 'رمز الدخول السري غير صحيح' }), {
+              status: 401,
+              headers: { 'content-type': 'application/json' },
+            });
+          }
           return new Response(renderAdminLoginHtml('رمز الدخول السري غير صحيح، يرجى إعادة المحاولة'), {
             status: 401,
             headers: html,
@@ -694,7 +759,7 @@ export default {
 
 async function handleAdmin(request: Request, env: Env, path: string): Promise<Response> {
   const url = new URL(request.url);
-  const key = url.searchParams.get('key') ?? parseCookie(request, 'admin_key') ?? '';
+  const key = normalizeDigits(url.searchParams.get('key') ?? parseCookie(request, 'admin_key') ?? request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '') ?? '');
   
   if (key !== env.ADMIN_KEY && key !== '442433' && key !== 'taxi-admin-2025') {
     return Response.redirect(`${url.origin}/admin/login`, 302);
@@ -726,6 +791,9 @@ function parseCookie(request: Request, name: string): string | null {
 }
 
 const html = { 'content-type': 'text/html; charset=utf-8' };
-function json(obj: unknown, status = 200): Response {
-  return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
+function json(obj: unknown, status = 200, headersInit: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { 'content-type': 'application/json', ...headersInit },
+  });
 }

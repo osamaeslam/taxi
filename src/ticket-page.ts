@@ -1387,7 +1387,7 @@ export function renderAdminLoginHtml(error?: string): string {
     <form method="POST" action="/admin/login">
       <div class="form-group">
         <label for="admin_key">رمز الدخول السري للإدارة (PIN / Password):</label>
-        <input type="password" id="admin_key" name="admin_key" required placeholder="أدخل الباسورد (442433)..." autofocus autocomplete="current-password">
+        <input type="password" id="admin_key" name="admin_key" required placeholder="••••••••" autofocus autocomplete="current-password">
       </div>
 
       <label class="remember-box">
@@ -1592,11 +1592,11 @@ export function renderMainPortalHtml(lines: any[], hostUrl: string): string {
           </div>
           <h2 class="portal-title" style="font-size:20px;color:#1e293b;">لوحة الإدارة والتحكم الشاملة</h2>
           <p class="portal-desc">
-            التحكم الكامل في المنظومة: إضافة وتفعيل أرقام السائقين، كشوفات اليوم، متابعة تفاوض المشاوير، حسابات الكباتن، رسائل واتساب، ومزامنة Google Sheets (محمية بكلمة المرور: 442433).
+            التحكم الكامل في المنظومة: إضافة وتفعيل أرقام السائقين، كشوفات اليوم، متابعة تفاوض المشاوير، حسابات الكباتن، رسائل واتساب، ومزامنة Google Sheets (محمية برمز مرور الإدارة السري).
           </p>
         </div>
         <div>
-          <a href="/admin" class="btn-action btn-gray">🔐 دخول لوحة الإدارة (الباسورد: 442433) ⬅️</a>
+          <a href="/admin" class="btn-action btn-gray">🔐 دخول لوحة الإدارة المحمية ⬅️</a>
         </div>
       </div>
     </div>

@@ -2300,7 +2300,10 @@ export async function adminApi(request: Request, env: Env, action: string): Prom
       }
       // ─── سواقين ───
       case 'driver.add': {
-        const rawPhone = String(body.phone ?? '').replace(/[^0-9]/g, '');
+        const rawPhone = String(body.phone ?? '')
+          .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
+          .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d).toString())
+          .replace(/[^0-9]/g, '');
         if (!rawPhone || !body.name) {
           return Response.json({ ok: false, error: 'الاسم ورقم الهاتف مطلوبين' }, { status: 400 });
         }
