@@ -61,8 +61,9 @@ async function gatewayStatus(adminKey: string): Promise<Record<string, any> | nu
 
 // ─── التنقل المشترك ───
 const NAV: Array<{ id: string; href: string; label: string }> = [
-  { id: 'home', href: '/', label: '🏠 الرئيسية' },
+  { id: 'home', href: '/admin', label: '🏠 لوحة التحكم' },
   { id: 'attendance', href: '/admin/attendance', label: '🟢 رادار الحضور والركوب' },
+  { id: 'portal', href: '/', label: '🌐 بوابة الركاب العامة' },
   { id: 'lines-react', href: '/lines', label: '🎓 خطوط الجامعات (React)' },
   { id: 'shuttle', href: '/admin/shuttle', label: '🚌 باصات وحجوزات اليوم' },
   { id: 'clients', href: '/admin/clients', label: '👥 دليل العملاء والركاب' },
@@ -371,8 +372,10 @@ function layout(page: string, key: string, title: string, body: string, extraCss
       <img src="/icon-192.png" style="width:16px;height:16px;border-radius:4px;object-fit:cover;">
       <span>📲 تثبيت التطبيق</span>
     </button>
-    <a href="/book" target="_blank" style="background:#fff;color:var(--accent);padding:5px 12px;border-radius:8px;font-size:12px;font-weight:bold;text-decoration:none;">🎫 رابط الحجز للعملاء</a>
+    <a href="https://docs.google.com/spreadsheets/d/1GvPC66HjIsy92ASJZ9l-2wIsUFUc4UnXsznqqXlSXv0/edit" target="_blank" style="background:#10b981;color:#fff;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:bold;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">📊 شيت جوجل كابتن عز ↗</a>
+    <a href="/book" target="_blank" style="background:#fff;color:var(--accent);padding:5px 12px;border-radius:8px;font-size:12px;font-weight:bold;text-decoration:none;">🎫 رابط الحجز</a>
     <button id="theme-toggle" class="theme-btn" onclick="toggleTheme()" title="تبديل الوضع الليلي والنهاري">🌙</button>
+    <a href="/admin/logout" style="background:rgba(239,68,68,0.25);color:#fff;border:1px solid rgba(255,255,255,0.4);padding:5px 11px;border-radius:8px;font-size:12px;font-weight:bold;text-decoration:none;" title="تسجيل الخروج">🚪 خروج</a>
   </div>
 </header>
 <nav class="tabs">${nav}</nav>
@@ -1367,39 +1370,112 @@ function clearAllPricingData() {
 `;
   } else if (page === 'drivers') {
     const { results: drivers } = await env.DB.prepare(
-      `SELECT id, name, phone, car, plate, status, commission_pct FROM drivers WHERE active = 1 ORDER BY id`
+      `SELECT id, name, phone, car, plate, status, commission_pct, active FROM drivers ORDER BY active DESC, id DESC`
     ).all();
-    title = 'السواقون';
-    body = `<p class="page-desc">ضيف سواق جديد، أو وقّف / شغّل سواق موجود.</p>
-<form class="bar" onsubmit="return addDriver(event, this)">
-  <label>الاسم</label><input name="name" required style="width:120px">
-  <label>التلفون</label><input name="phone" dir="ltr" required placeholder="9639XXXXXXXX" style="width:150px">
-  <label>السيارة</label><input name="car" placeholder="كيا سيراتو" style="width:120px">
-  <label>اللوحة</label><input name="plate" style="width:100px">
-  <label>العمولة %</label><input name="commission_pct" type="number" value="10" min="0" max="50" style="width:70px">
-  <button>➕ إضافة سائق</button>
+    title = 'إدارة وتفعيل حسابات السائقين والكباتن';
+    body = `
+<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:14px 16px;margin-bottom:18px;line-height:1.6;font-size:13px;color:#9a3412;">
+  💡 <b>كيف يعمل نظام السائقين؟</b><br>
+  بمجرد إضافة وتفعيل رقم موبايل السائق في هذا الجدول، يستطيع السائق الدخول فوراً عبر الرابط المخصص:
+  <a href="/driver" target="_blank" style="font-weight:bold;color:#ea580c;text-decoration:underline;">/driver</a>
+  بمجرد كتابة رقم هاتفه فقط (بدون أي كلمة سر معقدة)، ويفتح له كشف ركاب باصه اليومي وتأكيد ركوبهم 🟢، ويثبت التطبيق على هاتفه بشكل دائم!
+</div>
+
+<form class="bar" onsubmit="return addDriver(event, this)" style="background:var(--card);border:1px solid var(--line);padding:16px;border-radius:12px;margin-bottom:20px;">
+  <div style="display:flex;flex-direction:column;gap:4px;">
+    <label style="font-weight:bold;">اسم الكابتن *</label>
+    <input name="name" required placeholder="مثال: كابتن محمد العياطي" style="width:180px;">
+  </div>
+  <div style="display:flex;flex-direction:column;gap:4px;">
+    <label style="font-weight:bold;">رقم الموبايل (واتساب) *</label>
+    <input name="phone" dir="ltr" required placeholder="010XXXXXXXX" style="width:160px;font-family:monospace;font-weight:bold;">
+  </div>
+  <div style="display:flex;flex-direction:column;gap:4px;">
+    <label style="font-weight:bold;">السيارة / خط الباص</label>
+    <input name="car" placeholder="مثال: تويوتا هايس 14 راكب - خط حلوان" style="width:220px;">
+  </div>
+  <div style="display:flex;flex-direction:column;gap:4px;">
+    <label style="font-weight:bold;">رقم اللوحة</label>
+    <input name="plate" placeholder="ب ع د 123" style="width:110px;">
+  </div>
+  <div style="display:flex;flex-direction:column;gap:4px;">
+    <label style="font-weight:bold;">العمولة %</label>
+    <input name="commission_pct" type="number" value="10" min="0" max="50" style="width:80px;">
+  </div>
+  <div style="display:flex;align-items:flex-end;margin-top:16px;">
+    <button style="background:#ea580c;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-weight:bold;cursor:pointer;">➕ تفعيل وإضافة كابتن</button>
+  </div>
 </form>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+  <h3 style="margin:0;font-size:15px;font-weight:bold;">📋 قائمة السائقين والكباتن المسجلين (${(drivers ?? []).length} سائق)</h3>
+  <span style="font-size:12px;color:var(--muted);">المفعلون يتاح لهم الدخول عبر /driver برقم الهاتف</span>
+</div>
+
 <table>
-<tr><th>#</th><th>الاسم</th><th>التلفون</th><th>السيارة</th><th>اللوحة</th><th>العمولة</th><th>الحالة</th><th></th></tr>
+<tr>
+  <th>#</th>
+  <th>اسم الكابتن</th>
+  <th>رقم الموبايل</th>
+  <th>السيارة / الخط</th>
+  <th>اللوحة</th>
+  <th>حالة الدخول بالهاتف</th>
+  <th>الحالة الميدانية</th>
+  <th>شاشة كشف الركاب</th>
+  <th>إجراءات الإدارة</th>
+</tr>
 ${(drivers ?? []).map((d: any) => `<tr>
-  <td>${d.id}</td><td>${escHtml(d.name)}</td><td dir="ltr">+${escHtml(d.phone)}</td><td>${escHtml(d.car)}</td><td>${escHtml(d.plate)}</td>
-  <td>${d.commission_pct}%</td><td><span class="pill">${escHtml(d.status)}</span></td>
-  <td>
-    <button class="small" onclick="driverStatus(${d.id},'${d.status === 'AVAILABLE' ? 'OFFLINE' : 'AVAILABLE'}')">${d.status === 'AVAILABLE' ? 'إيقاف' : 'تشغيل'}</button>
-    <button class="small danger" onclick="delDriver(${d.id})">حذف</button>
+  <td>${d.id}</td>
+  <td><b>${escHtml(d.name)}</b></td>
+  <td dir="ltr" style="font-family:monospace;font-weight:bold;">
+    ${escHtml(d.phone)}
+    <a href="https://wa.me/2${escHtml(d.phone.replace(/^2/, ''))}" target="_blank" style="text-decoration:none;margin-right:4px;" title="واتساب">💬</a>
   </td>
-</tr>`).join('')}
+  <td>${escHtml(d.car || '—')}</td>
+  <td>${escHtml(d.plate || '—')}</td>
+  <td>
+    ${d.active === 1 ? '<span class="pill" style="background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;font-weight:bold;">🟢 مفعل للدخول</span>' : '<span class="pill" style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;font-weight:bold;">🔴 معطل</span>'}
+  </td>
+  <td>
+    <button class="small" onclick="driverStatus(${d.id},'${d.status === 'AVAILABLE' ? 'OFFLINE' : 'AVAILABLE'}')" style="padding:4px 8px;font-size:11px;">
+      ${d.status === 'AVAILABLE' ? '🟢 متاح' : '⚪ غير متاح'}
+    </button>
+  </td>
+  <td>
+    <a href="/driver?phone=${encodeURIComponent(d.phone)}" target="_blank" class="small" style="text-decoration:none;display:inline-block;padding:5px 10px;background:#f1f5f9;color:#0e7c66;font-weight:bold;border-radius:6px;border:1px solid #cbd5e1;">
+      📋 فتح كشف الركاب ↗
+    </a>
+  </td>
+  <td>
+    <button class="small" onclick="driverToggleActive(${d.id}, ${d.active})" style="padding:4px 8px;">
+      ${d.active === 1 ? 'تعطيل الحساب' : 'تفعيل الحساب'}
+    </button>
+    <button class="small danger" onclick="delDriver(${d.id})" style="padding:4px 8px;">حذف</button>
+  </td>
+</tr>`).join('') || '<tr><td colspan="9" class="muted" style="text-align:center;padding:24px;">لا يوجد سائقين مسجلين بعد. أضف أول كابتن من النموذج أعلاه 👆</td></tr>'}
 </table>`;
     pageJs = `
 function addDriver(ev, f) {
   ev.preventDefault();
+  const phone = f.phone.value.replace(/[^0-9]/g, '');
+  if (!phone) {
+    alert('يرجى إدخال رقم الهاتف بشكل صحيح');
+    return false;
+  }
   return api('driver.add', {
-    name: f.name.value, phone: f.phone.value.replace(/[^0-9]/g, ''),
-    car: f.car.value, plate: f.plate.value, commission_pct: +f.commission_pct.value,
+    name: f.name.value,
+    phone: phone,
+    car: f.car.value,
+    plate: f.plate.value,
+    commission_pct: +f.commission_pct.value,
   });
 }
 function driverStatus(id, status) { api('driver.status', { id, status }); }
-function delDriver(id) { if (confirm('حذف السائق ' + id + '؟')) api('driver.del', { id }); }
+function driverToggleActive(id, curActive) {
+  const newActive = curActive === 1 ? 0 : 1;
+  api('driver.toggle_active', { id, active: newActive });
+}
+function delDriver(id) { if (confirm('هل أنت متأكد من حذف السائق رقم ' + id + ' نهائياً؟')) api('driver.del', { id }); }
 `;
   } else if (page === 'rides') {
     const { results: rides } = await env.DB.prepare(
@@ -1558,7 +1634,7 @@ ${vehicles.map((v: any) => `<tr>
     <button class="small" onclick="viewManifest(${v.id}, '${escHtml(v.vehicle_name)}')">📋 كشف الطباعة</button>
     <a href="/attendance?vehicle_id=${v.id}" target="_blank" class="small" style="background:#10b981;color:#fff;text-decoration:none;padding:5px 9px;border-radius:6px;font-weight:bold;margin-inline-start:4px;display:inline-block;">📱 رادار السائق</a>
   </td>
-</tr>`).join('')}
+</tr>`).join('') || '<tr><td colspan="8" class="muted" style="text-align:center;padding:24px;">لا توجد سيارات أو باصات مسجلة بعد.</td></tr>'}
 </table>
 
 <h2>📋 حجوزات طلاب اليوم</h2>
@@ -2224,10 +2300,22 @@ export async function adminApi(request: Request, env: Env, action: string): Prom
       }
       // ─── سواقين ───
       case 'driver.add': {
+        const rawPhone = String(body.phone ?? '').replace(/[^0-9]/g, '');
+        if (!rawPhone || !body.name) {
+          return Response.json({ ok: false, error: 'الاسم ورقم الهاتف مطلوبين' }, { status: 400 });
+        }
         await env.DB.prepare(
-          `INSERT INTO drivers (phone, name, car, plate, commission_pct, group_jid) VALUES (?, ?, ?, ?, ?, ?)`
+          `INSERT INTO drivers (phone, name, car, plate, commission_pct, group_jid, active, status) 
+           VALUES (?, ?, ?, ?, ?, ?, 1, 'AVAILABLE')
+           ON CONFLICT(phone) DO UPDATE SET 
+             name = excluded.name, 
+             car = excluded.car, 
+             plate = excluded.plate, 
+             commission_pct = excluded.commission_pct,
+             active = 1,
+             status = 'AVAILABLE'`
         )
-          .bind(String(body.phone), String(body.name), String(body.car ?? ''), String(body.plate ?? ''), Number(body.commission_pct ?? 10), String(body.group_jid ?? ''))
+          .bind(rawPhone, String(body.name), String(body.car ?? ''), String(body.plate ?? ''), Number(body.commission_pct ?? 10), String(body.group_jid ?? ''))
           .run();
         return Response.json({ ok: true });
       }
@@ -2235,8 +2323,12 @@ export async function adminApi(request: Request, env: Env, action: string): Prom
         await env.DB.prepare(`UPDATE drivers SET status = ? WHERE id = ?`).bind(String(body.status), Number(body.id)).run();
         return Response.json({ ok: true });
       }
+      case 'driver.toggle_active': {
+        await env.DB.prepare(`UPDATE drivers SET active = ? WHERE id = ?`).bind(Number(body.active), Number(body.id)).run();
+        return Response.json({ ok: true });
+      }
       case 'driver.del': {
-        await env.DB.prepare(`UPDATE drivers SET active = 0 WHERE id = ?`).bind(Number(body.id)).run();
+        await env.DB.prepare(`DELETE FROM drivers WHERE id = ?`).bind(Number(body.id)).run();
         return Response.json({ ok: true });
       }
 

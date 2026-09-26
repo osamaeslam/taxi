@@ -83,6 +83,33 @@ export async function setSheetsWebhookUrl(db: D1Database, url: string): Promise<
   `).bind(url.trim()).run();
 }
 
+export async function getGoogleSheetId(db: D1Database): Promise<string> {
+  try {
+    const row = await db.prepare("SELECT value FROM settings WHERE key = 'google_sheet_id'").first<{ value: string }>();
+    return row?.value || '1GvPC66HjIsy92ASJZ9l-2wIsUFUc4UnXsznqqXlSXv0';
+  } catch {
+    return '1GvPC66HjIsy92ASJZ9l-2wIsUFUc4UnXsznqqXlSXv0';
+  }
+}
+
+export async function setGoogleSheetId(db: D1Database, sheetId: string): Promise<void> {
+  const cleanId = sheetId.trim().replace(/^https?:\/\/.*\/d\//, '').replace(/\/.*$/, '');
+  const url = `https://docs.google.com/spreadsheets/d/${cleanId}/edit`;
+  await db.prepare(`
+    INSERT INTO settings (key, value) VALUES ('google_sheet_id', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).bind(cleanId).run();
+  await db.prepare(`
+    INSERT INTO settings (key, value) VALUES ('google_sheet_url', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).bind(url).run();
+}
+
+export async function getGoogleSheetUrl(db: D1Database): Promise<string> {
+  const id = await getGoogleSheetId(db);
+  return `https://docs.google.com/spreadsheets/d/${id}/edit`;
+}
+
 export async function pushRowToGoogleSheets(
   db: D1Database,
   data: {

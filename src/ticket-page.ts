@@ -294,7 +294,7 @@ function triggerPwaInstallTicket() {
 </html>`;
 }
 
-export function renderPublicBookingPage(lines: any[]): string {
+export function renderPublicBookingPage(lines: any[], initialTab: 'shuttle' | 'ride' = 'shuttle'): string {
   const lineOptions = lines.map(l => `<option value="${l.id}" data-round="${l.round_trip_price}" data-oneway="${l.one_way_price}">${escHtml(l.name)} (${l.departure_time})</option>`).join('');
 
   return `<!doctype html>
@@ -302,7 +302,7 @@ export function renderPublicBookingPage(lines: any[]): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <title>حجز باصات ومشاوير كابتن عز — العياط والجامعات</title>
+  <title>حجز باصات الجامعات والمشاوير — كابتن عز العياط</title>
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0e7c66">
   <meta name="mobile-web-app-capable" content="yes">
@@ -317,6 +317,8 @@ export function renderPublicBookingPage(lines: any[]): string {
     :root {
       --primary: #0e7c66;
       --primary-dark: #095344;
+      --blue: #2563eb;
+      --blue-dark: #1d4ed8;
       --bg: #f8fafc;
       --card: #ffffff;
       --ink: #0f172a;
@@ -326,14 +328,19 @@ export function renderPublicBookingPage(lines: any[]): string {
     }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Cairo', 'Noto Naskh Arabic', sans-serif; margin: 0; padding: 0; }
     body { background: var(--bg); color: var(--ink); padding: 16px 12px; min-height: 100vh; display: flex; justify-content: center; }
-    .container { width: 100%; max-width: 520px; }
+    .container { width: 100%; max-width: 540px; }
     
-    .brand-card { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; border-radius: 16px; padding: 22px; text-align: center; margin-bottom: 16px; box-shadow: 0 8px 20px rgba(14,124,102,0.25); }
-    .brand-card h1 { font-size: 24px; font-weight: 900; margin-bottom: 6px; }
+    .brand-card { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; border-radius: 18px; padding: 22px 18px; text-align: center; margin-bottom: 16px; box-shadow: 0 8px 24px rgba(14,124,102,0.22); transition: background 0.3s; }
+    .brand-card.ride-theme { background: linear-gradient(135deg, #1e40af, #2563eb); box-shadow: 0 8px 24px rgba(37,99,235,0.22); }
+    .brand-card h1 { font-size: 22px; font-weight: 900; margin-bottom: 6px; }
     .brand-card p { font-size: 13px; opacity: 0.9; line-height: 1.5; }
-    .dev-tag { display: inline-block; background: rgba(255,255,255,0.2); padding: 3px 12px; border-radius: 20px; font-size: 11px; margin-top: 10px; font-weight: 600; }
+    
+    .service-tabs { display: flex; gap: 8px; margin-bottom: 16px; background: #e2e8f0; padding: 5px; border-radius: 14px; }
+    .svc-tab-btn { flex: 1; padding: 12px 8px; border: 0; border-radius: 10px; font-size: 13.5px; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s; background: transparent; color: var(--muted); }
+    .svc-tab-btn.active.shuttle { background: #0e7c66; color: #fff; box-shadow: 0 3px 10px rgba(14,124,102,0.3); }
+    .svc-tab-btn.active.ride { background: #2563eb; color: #fff; box-shadow: 0 3px 10px rgba(37,99,235,0.3); }
 
-    .form-card { background: var(--card); border-radius: 16px; border: 1px solid var(--border); padding: 22px; box-shadow: 0 4px 15px rgba(0,0,0,0.04); }
+    .form-card { background: var(--card); border-radius: 16px; border: 1.5px solid var(--border); padding: 22px 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); margin-bottom: 16px; }
     .form-group { margin-bottom: 16px; }
     label { display: block; font-size: 13px; font-weight: 700; color: #334155; margin-bottom: 6px; }
     input, select, textarea { width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 14px; color: var(--ink); background: #fff; outline: none; transition: border-color 0.2s; }
@@ -346,51 +353,63 @@ export function renderPublicBookingPage(lines: any[]): string {
     .radio-title { font-size: 14px; font-weight: 800; }
     .radio-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
+    .car-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .car-card { border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 6px; text-align: center; cursor: pointer; transition: all 0.2s; }
+    .car-card.active { border-color: #2563eb; background: #eff6ff; }
+    .car-icon { font-size: 20px; margin-bottom: 3px; }
+    .car-name { font-size: 12px; font-weight: 800; }
+    .car-desc { font-size: 10px; color: var(--muted); }
+
     .price-preview { background: #ecfdf5; border: 1.5px solid #a7f3d0; border-radius: 10px; padding: 12px; text-align: center; margin: 16px 0; }
     .price-num { font-size: 24px; font-weight: 900; color: #065f46; }
     .price-lbl { font-size: 12px; color: #047857; font-weight: 600; }
 
-    .submit-btn { width: 100%; background: var(--primary); color: #fff; padding: 14px; border: 0; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 4px 12px rgba(14,124,102,0.3); transition: all 0.2s; }
+    .submit-btn { width: 100%; background: var(--primary); color: #fff; padding: 14px; border: 0; border-radius: 12px; font-size: 15px; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 4px 12px rgba(14,124,102,0.3); transition: all 0.2s; }
     .submit-btn:hover { background: var(--primary-dark); }
+    .submit-btn.blue { background: #2563eb; box-shadow: 0 4px 12px rgba(37,99,235,0.3); }
+    .submit-btn.blue:hover { background: #1d4ed8; }
 
     .villages-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
     
-    .footer { text-align: center; margin-top: 20px; font-size: 12px; color: var(--muted); }
+    .footer { text-align: center; margin-top: 14px; font-size: 12px; color: var(--muted); }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <div class="brand-card">
-    <div style="display:flex;justify-content:center;margin-bottom:10px;">
-      <img src="/icon-192.png" alt="كابتن عز" style="width:62px;height:62px;border-radius:16px;box-shadow:0 4px 14px rgba(0,0,0,0.3);border:2px solid #f59e0b;object-fit:cover;">
+  <div class="brand-card" id="mainBrandCard">
+    <div style="display:flex;justify-content:center;margin-bottom:8px;">
+      <img src="/icon-192.png" alt="كابتن عز" style="width:58px;height:58px;border-radius:14px;box-shadow:0 4px 12px rgba(0,0,0,0.25);border:2px solid #f59e0b;object-fit:cover;">
     </div>
-    <h1>كابتن عز — باصات الجامعات والمشاوير</h1>
-    <p>منظومة حجز باصات وسيارات الجامعات المصرية والمشاوير الخاصة<br>خدمة مراكز العياط وقراها بأمان ودقة والتزام</p>
+    <h1 id="brandTitle">كابتن عز — باصات الجامعات والمشاوير 🚕</h1>
+    <p id="brandSubtitle">منظومة الحجز الذكية لباصات الجامعات المصرية والمشاوير الخاصة من العياط وقراها</p>
     <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
-      <div class="dev-tag">برمجة وتطوير: أسامة بسيوني لتطوير المواقع والتطبيقات</div>
-      <button id="pwaBookingBtn" onclick="triggerBookingPwaInstall()" style="background:#f59e0b;color:#fff;border:0;padding:4px 12px;border-radius:15px;font-size:11px;font-weight:bold;cursor:pointer;display:inline-flex;align-items:center;gap:4px;box-shadow:0 2px 6px rgba(245,158,11,0.3);">
-        📲 تثبيت التطبيق
+      <button id="pwaBookingBtn" onclick="triggerBookingPwaInstall()" style="background:#f59e0b;color:#fff;border:0;padding:4px 14px;border-radius:15px;font-size:11px;font-weight:bold;cursor:pointer;display:inline-flex;align-items:center;gap:4px;box-shadow:0 2px 6px rgba(245,158,11,0.3);">
+        📲 تثبيت التطبيق كأيقونة
       </button>
+      <a href="/" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 12px;border-radius:15px;font-size:11px;font-weight:bold;text-decoration:none;">
+        🏠 البوابة الرئيسية
+      </a>
     </div>
   </div>
 
-  <!-- تبديل نوع الخدمة -->
-  <div style="display:flex;gap:10px;margin-bottom:16px;">
-    <a href="/book" style="flex:1;text-align:center;text-decoration:none;padding:12px;border-radius:12px;font-weight:bold;font-size:14px;background:var(--primary);color:#fff;box-shadow:0 3px 8px rgba(14,124,102,0.3);border:2px solid var(--primary);display:flex;align-items:center;justify-content:center;gap:6px;">
+  <!-- التبويب الموحد بين باصات الجامعات والمشوار الخاص -->
+  <div class="service-tabs">
+    <button type="button" id="tabShuttleBtn" onclick="switchBookingService('shuttle')" class="svc-tab-btn active shuttle">
       <span>🎓</span>
-      <span>باصات الجامعات (14 راكب)</span>
-    </a>
-    <a href="/ride" style="flex:1;text-align:center;text-decoration:none;padding:12px;border-radius:12px;font-weight:bold;font-size:14px;background:var(--card);color:#2563eb;border:2px solid #93c5fd;display:flex;align-items:center;justify-content:center;gap:6px;box-shadow:0 2px 5px rgba(0,0,0,0.04);">
+      <span>باصات الجامعات (16 جامعة)</span>
+    </button>
+    <button type="button" id="tabRideBtn" onclick="switchBookingService('ride')" class="svc-tab-btn">
       <span>🚗</span>
-      <span>طلب مشوار خاص / تاكسي</span>
-    </a>
+      <span>مشوار خاص / تاكسي بالتفاوض</span>
+    </button>
   </div>
 
-  <div class="form-card">
+  <!-- 1. نموذج باصات الجامعات -->
+  <div class="form-card" id="shuttleFormBox">
     <form id="bookingForm" onsubmit="return submitBooking(event)">
       <div class="form-group">
-        <label>👤 اسم الطالب / العميل ثلاثي *</label>
+        <label>👤 اسم الطالب / الراكب ثلاثي *</label>
         <input type="text" id="student_name" placeholder="مثال: أحمد محمود العياطي" required>
       </div>
 
@@ -401,7 +420,7 @@ export function renderPublicBookingPage(lines: any[]): string {
 
       <div class="form-group">
         <label>📍 القرية / نقطة الركوب بالعياط *</label>
-        <input type="text" id="pickup_location" placeholder="مثال: موقف العياط / كوبري البليدة / المتانيا" required>
+        <input type="text" id="pickup_location" placeholder="مثال: موقف العياط / كوبري البليدة / برنشت" required>
         <div class="villages-hint">نغطي: العياط، البليدة، المتانيا، برنشت، طهما، ميت القائد، كفر عمار، كفر شحاتة، بهبيت، جرزا...</div>
       </div>
 
@@ -445,19 +464,138 @@ export function renderPublicBookingPage(lines: any[]): string {
       </div>
 
       <button type="submit" id="submitBtn" class="submit-btn">
-        <span>🎫 تأكيد الحجز واستخراج التذكرة الذكية</span>
+        <span>🎫 تأكيد حجز مقعد الباص واستخراج التذكرة</span>
+      </button>
+    </form>
+  </div>
+
+  <!-- 2. نموذج طلب المشوار الخاص / التاكسي -->
+  <div class="form-card" id="rideFormBox" style="display:none;">
+    <form id="rideBookingForm" onsubmit="return submitRideBooking(event)">
+      <div class="form-group">
+        <label>👤 اسم العميل ثلاثي *</label>
+        <input type="text" id="client_name" placeholder="مثال: محمود عبد الفتاح" required>
+      </div>
+
+      <div class="form-group">
+        <label>📱 رقم الموبايل (واتساب) *</label>
+        <input type="tel" id="client_phone" placeholder="010XXXXXXXX" dir="ltr" required>
+      </div>
+
+      <div class="form-group">
+        <label>📍 مكان الركوب (العياط أو القرية) *</label>
+        <input type="text" id="ride_pickup" placeholder="مثال: العياط البلد / برنشت / كوبري البليدة" required>
+        <div class="villages-hint">نغطي كافة قرى ومراكز العياط والجيزة</div>
+      </div>
+
+      <div class="form-group">
+        <label>🏁 مكان التوصيل / النزول المطلوب *</label>
+        <input type="text" id="ride_dropoff" placeholder="مثال: المهندسين / المعادي / 6 أكتوبر / مستشفى / مطار القاهرة" required>
+      </div>
+
+      <div class="form-group">
+        <label>🚗 نوع السيارة المفضلة *</label>
+        <div class="car-grid">
+          <div class="car-card active" id="carModern" onclick="setCarType('ملاكي حديث مكيف')">
+            <div class="car-icon">🚗</div>
+            <div class="car-name">ملاكي حديث</div>
+            <div class="car-desc">مكيف 4 ركاب</div>
+          </div>
+          <div class="car-card" id="carTaxi" onclick="setCarType('تاكسي العياط')">
+            <div class="car-icon">🚕</div>
+            <div class="car-name">تاكسي</div>
+            <div class="car-desc">مشوار اقتصادي</div>
+          </div>
+          <div class="car-card" id="carVan" onclick="setCarType('فان عائلي 7 راكب')">
+            <div class="car-icon">🚐</div>
+            <div class="car-name">فان عائلي</div>
+            <div class="car-desc">7-14 راكب</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>⏰ موعد التحرك المطلوب</label>
+        <select id="ride_time_mode" onchange="toggleTimeInput()">
+          <option value="now">⚡ فوري الآن (أقرب كابتن متاح)</option>
+          <option value="scheduled">📅 حجز لموعد محدد لاحقاً</option>
+        </select>
+        <div id="scheduledTimeBox" style="display:none;margin-top:8px;">
+          <input type="datetime-local" id="ride_scheduled_time">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>💰 السعر المقترح للتفاوض (جنيه مصري) — اختياري</label>
+        <input type="number" id="offered_price" placeholder="مثال: 200 (أو اختر من التسعيرة أدناه)" min="20" style="font-size:16px;font-weight:bold;color:#2563eb;">
+        <div style="margin-top:8px;">
+          <div style="font-size:11px;font-weight:bold;color:#475569;margin-bottom:4px;">💡 أسعار إرشادية سريعة (اضغط لاختيار السعر):</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;" id="zonePricingChips">
+            <button type="button" onclick="setOfferedPrice(40)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">🏘️ داخل العياط: 40ج</button>
+            <button type="button" onclick="setOfferedPrice(70)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">🌾 منطقة ريفية: 70ج</button>
+            <button type="button" onclick="setOfferedPrice(240)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">🚗 مدينة: 240ج</button>
+            <button type="button" onclick="setOfferedPrice(550)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">✈️ مطار القاهرة: 550ج</button>
+            <button type="button" onclick="setOfferedPrice(450)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">👑 مشوار خاص: 450ج</button>
+          </div>
+        </div>
+        <div class="villages-hint" style="margin-top:6px;">يمكنك اقتراح سعرك وسيقوم الكابتن بالتأكيد أو التفاوض معك فوراً عبر واتساب.</div>
+      </div>
+
+      <div class="form-group">
+        <label>📝 ملاحظات إضافية للكابتن</label>
+        <input type="text" id="ride_notes" placeholder="مثال: وجود حقائب سفر / طلب تكييف">
+      </div>
+
+      <button type="submit" id="submitRideBtn" class="submit-btn blue">
+        <span>🚗 تأكيد طلب المشوار واستخراج التذكرة</span>
       </button>
     </form>
   </div>
 
   <div class="footer">
-    <div>منظومة كابتن عز لنقل الطلاب والمشاوير 🇪🇬</div>
+    <div>منظومة <strong>كابتن عز لخدمات النقل وباصات الجامعات</strong> 🇪🇬</div>
     <div style="font-weight:600;color:#334155;margin-top:3px;">برمجة: أسامة بسيوني لتطوير المواقع والتطبيقات</div>
   </div>
 </div>
 
 <script>
+let currentService = '${initialTab}';
 let currentDir = 'round';
+let selectedCarType = 'ملاكي حديث مكيف';
+
+function switchBookingService(mode) {
+  currentService = mode;
+  const shuttleBtn = document.getElementById('tabShuttleBtn');
+  const rideBtn = document.getElementById('tabRideBtn');
+  const shuttleBox = document.getElementById('shuttleFormBox');
+  const rideBox = document.getElementById('rideFormBox');
+  const brandCard = document.getElementById('mainBrandCard');
+  const title = document.getElementById('brandTitle');
+  const sub = document.getElementById('brandSubtitle');
+
+  if (mode === 'shuttle') {
+    shuttleBtn.className = 'svc-tab-btn active shuttle';
+    rideBtn.className = 'svc-tab-btn';
+    shuttleBox.style.display = 'block';
+    rideBox.style.display = 'none';
+    brandCard.className = 'brand-card';
+    title.innerText = 'كابتن عز — باصات الجامعات 🎓';
+    sub.innerText = 'حجز مقعد مضمون ومكيف لـ 16 جامعة مصرية من العياط وقراها';
+  } else {
+    shuttleBtn.className = 'svc-tab-btn';
+    rideBtn.className = 'svc-tab-btn active ride';
+    shuttleBox.style.display = 'none';
+    rideBox.style.display = 'block';
+    brandCard.className = 'brand-card ride-theme';
+    title.innerText = 'كابتن عز — طلب مشوار خاص وتاكسي 🚗';
+    sub.innerText = 'سيارات ملاكي حديثة وتاكسي وفان عائلي في خدمتك 24 ساعة بالتفاوض';
+  }
+}
+
+// Auto detect query or hash
+if (window.location.search.includes('tab=ride') || window.location.pathname.includes('/ride')) {
+  switchBookingService('ride');
+}
 
 function setDirection(dir) {
   currentDir = dir;
@@ -468,6 +606,7 @@ function setDirection(dir) {
 
 function updatePrice() {
   const sel = document.getElementById('line_id');
+  if (!sel) return;
   const opt = sel.options[sel.selectedIndex];
   if (!opt) return;
   const roundPrice = opt.getAttribute('data-round') || 60;
@@ -476,6 +615,43 @@ function updatePrice() {
   document.getElementById('priceDisplay').innerText = p + ' جنيه';
 }
 updatePrice();
+
+function setCarType(type) {
+  selectedCarType = type;
+  document.getElementById('carModern').className = 'car-card ' + (type.includes('ملاكي') ? 'active' : '');
+  document.getElementById('carTaxi').className = 'car-card ' + (type.includes('تاكسي') ? 'active' : '');
+  document.getElementById('carVan').className = 'car-card ' + (type.includes('فان') ? 'active' : '');
+}
+
+function setOfferedPrice(price) {
+  const inp = document.getElementById('offered_price');
+  if (inp) {
+    inp.value = price;
+    inp.focus();
+  }
+}
+
+function toggleTimeInput() {
+  const mode = document.getElementById('ride_time_mode').value;
+  document.getElementById('scheduledTimeBox').style.display = mode === 'scheduled' ? 'block' : 'none';
+}
+
+// Fetch dynamic zone pricing from server
+async function loadDynamicZoneChips() {
+  try {
+    const res = await fetch('/api/zone-pricing');
+    const data = await res.json();
+    if (data.ok && Array.isArray(data.zones) && data.zones.length > 0) {
+      const container = document.getElementById('zonePricingChips');
+      if (container) {
+        container.innerHTML = data.zones.map(z => 
+          '<button type="button" onclick="setOfferedPrice(' + z.base_price + ')" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">' + (z.icon || '📍') + ' ' + z.name + ': ' + z.base_price + 'ج</button>'
+        ).join('');
+      }
+    }
+  } catch (e) {}
+}
+loadDynamicZoneChips();
 
 async function submitBooking(e) {
   e.preventDefault();
@@ -505,12 +681,54 @@ async function submitBooking(e) {
     } else {
       alert(data.error || 'حدث خطأ في الحجز');
       btn.disabled = false;
-      btn.innerHTML = '🎫 تأكيد الحجز واستخراج التذكرة الذكية';
+      btn.innerHTML = '🎫 تأكيد حجز مقعد الباص واستخراج التذكرة';
     }
   } catch (err) {
     alert('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى');
     btn.disabled = false;
-    btn.innerHTML = '🎫 تأكيد الحجز واستخراج التذكرة الذكية';
+    btn.innerHTML = '🎫 تأكيد حجز مقعد الباص واستخراج التذكرة';
+  }
+  return false;
+}
+
+async function submitRideBooking(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submitRideBtn');
+  btn.disabled = true;
+  btn.innerHTML = '⏳ جاري تسجيل المشوار وتعيين الكود...';
+
+  const mode = document.getElementById('ride_time_mode').value;
+  const scheduledTime = mode === 'scheduled' ? document.getElementById('ride_scheduled_time').value : 'فوري الآن';
+
+  const payload = {
+    clientName: document.getElementById('client_name').value.trim(),
+    clientPhone: document.getElementById('client_phone').value.trim(),
+    pickupLocation: document.getElementById('ride_pickup').value.trim(),
+    dropoffLocation: document.getElementById('ride_dropoff').value.trim(),
+    carType: selectedCarType,
+    rideTime: scheduledTime,
+    offeredPrice: Number(document.getElementById('offered_price').value) || undefined,
+    notes: document.getElementById('ride_notes').value.trim()
+  };
+
+  try {
+    const res = await fetch('/api/book-ride', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.ok && data.ticketCode) {
+      window.location.href = '/ticket/' + data.ticketCode;
+    } else {
+      alert(data.error || 'حدث خطأ أثناء تسجيل المشوار');
+      btn.disabled = false;
+      btn.innerHTML = '🚗 تأكيد طلب المشوار واستخراج التذكرة';
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم، يرجى المحاولة ثانية');
+    btn.disabled = false;
+    btn.innerHTML = '🚗 تأكيد طلب المشوار واستخراج التذكرة';
   }
   return false;
 }
@@ -540,264 +758,8 @@ function triggerBookingPwaInstall() {
 </html>`;
 }
 
-export function renderPrivateRideBookingPage(): string {
-  return `<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <title>حجز مشوار خاص وتوصيل — كابتن عز العياط</title>
-  <link rel="manifest" href="/manifest.json">
-  <meta name="theme-color" content="#2563eb">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="كابتن عز">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
-  <link rel="shortcut icon" href="/favicon.ico">
-  <style>
-    :root {
-      --primary: #2563eb;
-      --primary-dark: #1d4ed8;
-      --bg: #f8fafc;
-      --card: #ffffff;
-      --ink: #0f172a;
-      --muted: #64748b;
-      --border: #e2e8f0;
-      --accent: #f59e0b;
-    }
-    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Cairo', 'Noto Naskh Arabic', sans-serif; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--ink); padding: 16px 12px; min-height: 100vh; display: flex; justify-content: center; }
-    .container { width: 100%; max-width: 520px; }
-    
-    .brand-card { background: linear-gradient(135deg, #1e40af, #2563eb); color: #fff; border-radius: 16px; padding: 22px; text-align: center; margin-bottom: 16px; box-shadow: 0 8px 20px rgba(37,99,235,0.25); }
-    .brand-card h1 { font-size: 24px; font-weight: 900; margin-bottom: 6px; }
-    .brand-card p { font-size: 13px; opacity: 0.9; line-height: 1.5; }
-    .dev-tag { display: inline-block; background: rgba(255,255,255,0.2); padding: 3px 12px; border-radius: 20px; font-size: 11px; margin-top: 10px; font-weight: 600; }
-
-    .form-card { background: var(--card); border-radius: 16px; border: 1px solid var(--border); padding: 22px; box-shadow: 0 4px 15px rgba(0,0,0,0.04); }
-    .form-group { margin-bottom: 16px; }
-    label { display: block; font-size: 13px; font-weight: 700; color: #334155; margin-bottom: 6px; }
-    input, select, textarea { width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 14px; color: var(--ink); background: #fff; outline: none; transition: border-color 0.2s; }
-    input:focus, select:focus, textarea:focus { border-color: var(--primary); }
-
-    .car-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
-    .car-card { border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 6px; text-align: center; cursor: pointer; transition: all 0.2s; }
-    .car-card.active { border-color: var(--primary); background: #eff6ff; }
-    .car-icon { font-size: 22px; margin-bottom: 4px; }
-    .car-name { font-size: 13px; font-weight: 800; }
-    .car-desc { font-size: 10px; color: var(--muted); }
-
-    .submit-btn { width: 100%; background: var(--primary); color: #fff; padding: 14px; border: 0; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 4px 12px rgba(37,99,235,0.3); transition: all 0.2s; }
-    .submit-btn:hover { background: var(--primary-dark); }
-
-    .villages-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
-    .footer { text-align: center; margin-top: 20px; font-size: 12px; color: var(--muted); }
-  </style>
-</head>
-<body>
-
-<div class="container">
-  <div class="brand-card">
-    <div style="display:flex;justify-content:center;margin-bottom:10px;">
-      <img src="/icon-192.png" alt="كابتن عز" style="width:62px;height:62px;border-radius:16px;box-shadow:0 4px 14px rgba(0,0,0,0.3);border:2px solid #f59e0b;object-fit:cover;">
-    </div>
-    <h1>كابتن عز — طلب مشوار خاص وتاكسي</h1>
-    <p>سيارات ملاكي حديثة وتاكسي وفان عائلي في خدمتك 24 ساعة<br>توصيل آمن وسريع من وإلى العياط وقراها والقاهرة والجيزة</p>
-    <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
-      <div class="dev-tag">برمجة وتطوير: أسامة بسيوني لتطوير المواقع والتطبيقات</div>
-    </div>
-  </div>
-
-  <!-- تبديل نوع الخدمة -->
-  <div style="display:flex;gap:10px;margin-bottom:16px;">
-    <a href="/book" style="flex:1;text-align:center;text-decoration:none;padding:12px;border-radius:12px;font-weight:bold;font-size:14px;background:var(--card);color:#0e7c66;border:2px solid #a7f3d0;display:flex;align-items:center;justify-content:center;gap:6px;box-shadow:0 2px 5px rgba(0,0,0,0.04);">
-      <span>🎓</span>
-      <span>باصات الجامعات (14 راكب)</span>
-    </a>
-    <a href="/ride" style="flex:1;text-align:center;text-decoration:none;padding:12px;border-radius:12px;font-weight:bold;font-size:14px;background:var(--primary);color:#fff;box-shadow:0 3px 8px rgba(37,99,235,0.3);border:2px solid var(--primary);display:flex;align-items:center;justify-content:center;gap:6px;">
-      <span>🚗</span>
-      <span>طلب مشوار خاص / تاكسي</span>
-    </a>
-  </div>
-
-  <div class="form-card">
-    <form id="rideBookingForm" onsubmit="return submitRideBooking(event)">
-      <div class="form-group">
-        <label>👤 اسم العميل ثلاثي *</label>
-        <input type="text" id="client_name" placeholder="مثال: محمود عبد الفتاح" required>
-      </div>
-
-      <div class="form-group">
-        <label>📱 رقم الموبايل (واتساب) *</label>
-        <input type="tel" id="client_phone" placeholder="010XXXXXXXX" dir="ltr" required>
-      </div>
-
-      <div class="form-group">
-        <label>📍 مكان الركوب (العياط أو القرية) *</label>
-        <input type="text" id="pickup_location" placeholder="مثال: العياط البلد / برنشت / كوبري البليدة" required>
-        <div class="villages-hint">نغطي: العياط، برنشت، البليدة، المتانيا، طهما، ميت القائد، كفر شحاتة، جرزا، باجة...</div>
-      </div>
-
-      <div class="form-group">
-        <label>🏁 مكان التوصيل / النزول المطلوب *</label>
-        <input type="text" id="dropoff_location" placeholder="مثال: المهندسين / المعادي / 6 أكتوبر / مستشفى / مطار القاهرة" required>
-      </div>
-
-      <div class="form-group">
-        <label>🚗 نوع السيارة المفضلة *</label>
-        <div class="car-grid">
-          <div class="car-card active" id="carModern" onclick="setCarType('ملاكي حديث مكيف')">
-            <div class="car-icon">🚗</div>
-            <div class="car-name">ملاكي حديث</div>
-            <div class="car-desc">مكيف 4 ركاب</div>
-          </div>
-          <div class="car-card" id="carTaxi" onclick="setCarType('تاكسي العياط')">
-            <div class="car-icon">🚕</div>
-            <div class="car-name">تاكسي</div>
-            <div class="car-desc">مشوار اقتصادي</div>
-          </div>
-          <div class="car-card" id="carVan" onclick="setCarType('فان عائلي 7-14 راكب')">
-            <div class="car-icon">🚐</div>
-            <div class="car-name">فان عائلي</div>
-            <div class="car-desc">مشاوير ومناسبات</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>⏰ توقيت المشوار *</label>
-        <div style="display:flex;gap:10px;">
-          <select id="ride_time_mode" onchange="toggleTimeInput()">
-            <option value="now">⚡ فوري الآن (أقرب كابتن)</option>
-            <option value="scheduled">📅 حجز موعد لاحق محدد</option>
-          </select>
-        </div>
-        <div id="scheduledTimeBox" style="display:none;margin-top:8px;">
-          <input type="datetime-local" id="scheduled_datetime">
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>💰 السعر المقدر / ميزانيتك المقترحة (اختياري)</label>
-        <input type="number" id="offered_price" placeholder="مثال: 200 (جنيه)">
-        <div style="margin-top:6px;">
-          <div style="font-size:12px;font-weight:bold;color:#334155;margin-bottom:4px;">🏷️ أو اختر من تسعيرة فئات المناطق الرسمية:</div>
-          <div id="zonePricingChips" style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button type="button" onclick="setOfferedPrice(40)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">🏙️ داخل العياط: 40ج</button>
-            <button type="button" onclick="setOfferedPrice(70)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">🌾 منطقة ريفية: 70ج</button>
-            <button type="button" onclick="setOfferedPrice(240)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">🚗 مدينة: 240ج</button>
-            <button type="button" onclick="setOfferedPrice(550)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">✈️ مطار القاهرة: 550ج</button>
-            <button type="button" onclick="setOfferedPrice(450)" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">👑 مشوار خاص: 450ج</button>
-          </div>
-        </div>
-        <div class="villages-hint" style="margin-top:6px;">يمكنك اقتراح سعرك وسيقوم الكابتن بالتأكيد أو التفاوض معك فوراً عبر واتساب.</div>
-      </div>
-
-      <div class="form-group">
-        <label>📝 ملاحظات إضافية للكابتن</label>
-        <input type="text" id="notes" placeholder="مثال: وجود حقائب سفر / طلب تكييف">
-      </div>
-
-      <button type="submit" id="submitRideBtn" class="submit-btn">
-        <span>🚗 تأكيد طلب المشوار واستخراج التذكرة</span>
-      </button>
-    </form>
-  </div>
-
-  <div class="footer">
-    <div>منظومة كابتن عز لخدمات النقل الذكي والمشاوير 🇪🇬</div>
-    <div style="font-weight:600;color:#334155;margin-top:3px;">برمجة: أسامة بسيوني لتطوير المواقع والتطبيقات</div>
-  </div>
-</div>
-
-<script>
-let selectedCarType = 'ملاكي حديث مكيف';
-
-function setCarType(type) {
-  selectedCarType = type;
-  document.getElementById('carModern').className = 'car-card ' + (type.includes('ملاكي') ? 'active' : '');
-  document.getElementById('carTaxi').className = 'car-card ' + (type.includes('تاكسي') ? 'active' : '');
-  document.getElementById('carVan').className = 'car-card ' + (type.includes('فان') ? 'active' : '');
-}
-
-function setOfferedPrice(price) {
-  const inp = document.getElementById('offered_price');
-  if (inp) {
-    inp.value = price;
-    inp.focus();
-  }
-}
-
-// Fetch dynamic zone pricing from server
-async function loadDynamicZoneChips() {
-  try {
-    const res = await fetch('/api/zone-pricing');
-    const data = await res.json();
-    if (data.ok && Array.isArray(data.zones) && data.zones.length > 0) {
-      const container = document.getElementById('zonePricingChips');
-      if (container) {
-        container.innerHTML = data.zones.map(z => 
-          \`<button type="button" onclick="setOfferedPrice(\${z.base_price})" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer;">\${z.icon || '📍'} \${z.name}: \${z.base_price}ج</button>\`
-        ).join('');
-      }
-    }
-  } catch (e) {}
-}
-loadDynamicZoneChips();
-
-function toggleTimeInput() {
-  const mode = document.getElementById('ride_time_mode').value;
-  document.getElementById('scheduledTimeBox').style.display = mode === 'scheduled' ? 'block' : 'none';
-}
-
-async function submitRideBooking(e) {
-  e.preventDefault();
-  const btn = document.getElementById('submitRideBtn');
-  btn.disabled = true;
-  btn.innerHTML = '⏳ جاري تسجيل المشوار وتعيين الكود...';
-
-  const timeMode = document.getElementById('ride_time_mode').value;
-  const scheduledTime = timeMode === 'scheduled' ? document.getElementById('scheduled_datetime').value : 'فوري الآن';
-
-  const payload = {
-    clientName: document.getElementById('client_name').value.trim(),
-    clientPhone: document.getElementById('client_phone').value.trim(),
-    pickupLocation: document.getElementById('pickup_location').value.trim(),
-    dropoffLocation: document.getElementById('dropoff_location').value.trim(),
-    carType: selectedCarType,
-    rideTime: scheduledTime,
-    offeredPrice: Number(document.getElementById('offered_price').value) || undefined,
-    notes: document.getElementById('notes').value.trim()
-  };
-
-  try {
-    const res = await fetch('/api/book-ride', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if (data.ok && data.ticketCode) {
-      window.location.href = '/ticket/' + data.ticketCode;
-    } else {
-      alert(data.error || 'حدث خطأ أثناء تسجيل المشوار');
-      btn.disabled = false;
-      btn.innerHTML = '🚗 تأكيد طلب المشوار واستخراج التذكرة';
-    }
-  } catch (err) {
-    alert('تعذر الاتصال بالخادم، يرجى المحاولة ثانية');
-    btn.disabled = false;
-    btn.innerHTML = '🚗 تأكيد طلب المشوار واستخراج التذكرة';
-  }
-  return false;
-}
-</script>
-
-</body>
-</html>`;
+export function renderPrivateRideBookingPage(lines?: any[]): string {
+  return renderPublicBookingPage(lines || [], 'ride');
 }
 
 export function renderRideTicketHtml(ride: any, hostUrl: string): string {
@@ -1052,7 +1014,8 @@ export function renderDriverAttendanceHtml(
   allVehicles: any[],
   bookings: any[],
   targetDate: string,
-  hostUrl: string
+  hostUrl: string,
+  driver?: any | null
 ): string {
   const vName = vehicle?.vehicle_name || 'باص كابتن عز';
   const driverName = vehicle?.driver_name || 'الكابتن';
@@ -1294,8 +1257,427 @@ function filterCards(query) {
   });
 }
 </script>
-
 </body>
 </html>`;
 }
+
+
+export function renderDriverLoginHtml(error?: string): string {
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>دخول السائقين والكباتن — كابتن عز</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#ea580c">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <style>
+    :root {
+      --primary: #ea580c;
+      --primary-dark: #c2410c;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Cairo', sans-serif; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--ink); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+    .login-card { background: var(--card); border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,0.06); width: 100%; max-width: 420px; padding: 28px 24px; text-align: center; }
+    .logo-badge { width: 70px; height: 70px; border-radius: 18px; margin: 0 auto 14px; box-shadow: 0 6px 16px rgba(234,88,12,0.25); border: 2px solid #f59e0b; object-fit: cover; }
+    h1 { font-size: 20px; font-weight: 900; color: var(--primary); margin-bottom: 6px; }
+    p.desc { font-size: 13px; color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
+    .alert-err { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 10px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 16px; font-weight: bold; }
+    .form-group { margin-bottom: 16px; text-align: right; }
+    label { display: block; font-size: 13px; font-weight: 700; color: #334155; margin-bottom: 6px; }
+    input[type="tel"], input[type="text"] { width: 100%; padding: 13px 14px; border: 1.5px solid var(--border); border-radius: 12px; font-size: 16px; outline: none; transition: border-color 0.2s; text-align: center; font-family: monospace; letter-spacing: 1px; }
+    input:focus { border-color: var(--primary); }
+    .remember-box { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 20px; justify-content: center; cursor: pointer; }
+    .btn-submit { width: 100%; padding: 14px; background: var(--primary); color: #fff; border: 0; border-radius: 12px; font-size: 15px; font-weight: 800; cursor: pointer; box-shadow: 0 4px 12px rgba(234,88,12,0.3); transition: all 0.2s; }
+    .btn-submit:hover { background: var(--primary-dark); }
+    .back-link { display: inline-block; margin-top: 18px; color: var(--muted); font-size: 13px; text-decoration: none; font-weight: 600; }
+    .back-link:hover { color: var(--primary); }
+    .hint-box { margin-top: 16px; font-size: 12px; color: #64748b; background: #fff7ed; border: 1px solid #ffedd5; padding: 10px 12px; border-radius: 10px; line-height: 1.5; text-align: right; }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <img src="/icon-192.png" alt="كابتن عز" class="logo-badge">
+    <h1>دخول السائقين والكباتن 🚕</h1>
+    <p class="desc">أدخل رقم هاتفك المسجل في المنظومة لفتح كشف ركابك اليومي</p>
+
+    ${error ? `<div class="alert-err">${escHtml(error)}</div>` : ''}
+
+    <form method="POST" action="/driver/login">
+      <div class="form-group">
+        <label for="driver_phone">رقم الموبايل المسجل لدى كابتن عز (واتساب):</label>
+        <input type="tel" id="driver_phone" name="phone" required placeholder="010XXXXXXXX" autofocus dir="ltr" autocomplete="tel">
+      </div>
+
+      <label class="remember-box">
+        <input type="checkbox" name="remember" value="1" checked>
+        <span>تثبيت وتسجيل الدخول دائماً على هذا الهاتف</span>
+      </label>
+
+      <button type="submit" class="btn-submit">📲 دخول كابتن الخط وعرض الركاب</button>
+    </form>
+
+    <div class="hint-box">
+      🔒 <b>ملاحظة للكباتن:</b> الدخول متاح فقط للأرقام المفعلة من إدارة كابتن عز. إذا كنت كابتناً جديداً أو تم تغيير رقمك، يرجى التواصل مع الإدارة لإضافتك وتفعيلك.
+    </div>
+
+    <div>
+      <a href="/" class="back-link">⬅️ الرجوع إلى البوابة الرئيسية</a>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+export function renderAdminLoginHtml(error?: string): string {
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>تسجيل دخول الإدارة — كابتن عز</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0e7c66">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <style>
+    :root {
+      --primary: #0e7c66;
+      --primary-dark: #095344;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Cairo', sans-serif; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--ink); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+    .login-card { background: var(--card); border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,0.06); width: 100%; max-width: 420px; padding: 28px 24px; text-align: center; }
+    .logo-badge { width: 70px; height: 70px; border-radius: 18px; margin: 0 auto 14px; box-shadow: 0 6px 16px rgba(14,124,102,0.25); border: 2px solid #f59e0b; object-fit: cover; }
+    h1 { font-size: 20px; font-weight: 900; color: var(--primary); margin-bottom: 6px; }
+    p.desc { font-size: 13px; color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
+    .alert-err { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 10px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 16px; font-weight: bold; }
+    .form-group { margin-bottom: 16px; text-align: right; }
+    label { display: block; font-size: 13px; font-weight: 700; color: #334155; margin-bottom: 6px; }
+    input[type="password"], input[type="text"] { width: 100%; padding: 13px 14px; border: 1.5px solid var(--border); border-radius: 12px; font-size: 15px; outline: none; transition: border-color 0.2s; text-align: center; font-family: monospace; letter-spacing: 1px; }
+    input:focus { border-color: var(--primary); }
+    .remember-box { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 20px; justify-content: center; cursor: pointer; }
+    .btn-submit { width: 100%; padding: 14px; background: var(--primary); color: #fff; border: 0; border-radius: 12px; font-size: 15px; font-weight: 800; cursor: pointer; box-shadow: 0 4px 12px rgba(14,124,102,0.3); transition: all 0.2s; }
+    .btn-submit:hover { background: var(--primary-dark); }
+    .back-link { display: inline-block; margin-top: 18px; color: var(--muted); font-size: 13px; text-decoration: none; font-weight: 600; }
+    .back-link:hover { color: var(--primary); }
+    .hint-box { margin-top: 16px; font-size: 11px; color: #94a3b8; background: #f1f5f9; padding: 8px 12px; border-radius: 8px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <img src="/icon-192.png" alt="كابتن عز" class="logo-badge">
+    <h1>دخول إدارة كابتن عز</h1>
+    <p class="desc">لوحة التحكم والمشاوير ورادار السائقين وبوت الواتساب</p>
+
+    ${error ? `<div class="alert-err">⚠️ ${escHtml(error)}</div>` : ''}
+
+    <form method="POST" action="/admin/login">
+      <div class="form-group">
+        <label for="admin_key">رمز الدخول السري للإدارة (PIN / Password):</label>
+        <input type="password" id="admin_key" name="admin_key" required placeholder="أدخل الباسورد (442433)..." autofocus autocomplete="current-password">
+      </div>
+
+      <label class="remember-box">
+        <input type="checkbox" name="remember" value="1" checked>
+        <span>تذكر تسجيل الدخول على هذا الجهاز (30 يوماً)</span>
+      </label>
+
+      <button type="submit" class="btn-submit">🔐 تسجيل الدخول للوحة الإدارة</button>
+    </form>
+
+    <div class="hint-box">
+      🔒 هذه الصفحة مخصصة لكابتن عز والإدارة فقط. الركاب والطلاب يمكنهم الحجز مباشرة دون تسجيل دخول.
+    </div>
+
+    <div>
+      <a href="/" class="back-link">⬅️ الرجوع إلى البوابة الرئيسية</a>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+export function renderMainPortalHtml(lines: any[], hostUrl: string): string {
+  const lineCount = lines?.length || 16;
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>كابتن عز — منظومة النقل الذكي وباصات الجامعات بالعياط</title>
+  <meta name="description" content="البوابة الرسمية لمنظومة كابتن عز لنقل الطلاب وباصات الجامعات والمشاوير الخاصة من العياط وقراها لكافة جامعات مصر.">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0e7c66">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="كابتن عز">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <style>
+    :root {
+      --primary: #0e7c66;
+      --primary-dark: #095344;
+      --accent: #f59e0b;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --green: #10b981;
+      --blue: #2563eb;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Cairo', sans-serif; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--ink); padding-bottom: 40px; }
+    
+    header { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; padding: 22px 16px 28px; box-shadow: 0 4px 20px rgba(14,124,102,0.25); text-align: center; position: relative; }
+    .header-top { display: flex; justify-content: space-between; align-items: center; max-width: 680px; margin: 0 auto 14px; }
+    .brand-group { display: flex; align-items: center; gap: 10px; text-align: right; }
+    .brand-logo { width: 44px; height: 44px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); border: 2px solid #f59e0b; object-fit: cover; }
+    .brand-name { font-size: 20px; font-weight: 900; letter-spacing: -0.5px; }
+    .brand-sub { font-size: 11px; opacity: 0.85; }
+    
+    .install-pwa-btn { background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; border: 0; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 3px 10px rgba(245,158,11,0.4); text-decoration: none; }
+    .admin-key-btn { background: rgba(255,255,255,0.2); color: #fff; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+
+    .hero-badge { display: inline-block; background: rgba(255,255,255,0.18); padding: 4px 14px; border-radius: 20px; font-size: 12px; font-weight: 700; margin-bottom: 8px; border: 1px solid rgba(255,255,255,0.3); }
+    .hero-title { font-size: 24px; font-weight: 900; margin-bottom: 6px; }
+    .hero-sub { font-size: 13px; opacity: 0.9; max-width: 520px; margin: 0 auto; line-height: 1.5; }
+
+    .container { max-width: 680px; margin: -16px auto 0; padding: 0 14px; position: relative; z-index: 5; }
+
+    /* شبكة البوابات الرئيسية */
+    .portal-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 24px; }
+    @media (min-width: 640px) {
+      .portal-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    .portal-card { background: var(--card); border-radius: 18px; border: 1.5px solid var(--line); padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: space-between; transition: transform 0.2s, box-shadow 0.2s; position: relative; overflow: hidden; }
+    .portal-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.08); }
+    .portal-card.featured { border-color: #6ee7b7; background: linear-gradient(180deg, #f0fdf4 0%, #ffffff 40%); }
+    .portal-card.ride-card { border-color: #bfdbfe; background: linear-gradient(180deg, #eff6ff 0%, #ffffff 40%); }
+    .portal-card.driver-card { border-color: #fed7aa; background: linear-gradient(180deg, #fff7ed 0%, #ffffff 40%); }
+
+    .portal-icon { font-size: 32px; margin-bottom: 10px; }
+    .portal-tag { display: inline-block; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 6px; margin-bottom: 8px; }
+    .tag-student { background: #dcfce7; color: #166534; }
+    .tag-ride { background: #dbeafe; color: #1e40af; }
+    .tag-driver { background: #ffedd5; color: #9a3412; }
+    .tag-admin { background: #f1f5f9; color: #475569; }
+
+    .portal-title { font-size: 18px; font-weight: 800; color: var(--ink); margin-bottom: 6px; }
+    .portal-desc { font-size: 13px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; flex-grow: 1; }
+
+    .btn-action { display: block; text-align: center; text-decoration: none; padding: 12px; border-radius: 12px; font-weight: 800; font-size: 14px; transition: 0.15s; }
+    .btn-green { background: #10b981; color: #fff; box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
+    .btn-green:hover { background: #059669; }
+    .btn-blue { background: #2563eb; color: #fff; box-shadow: 0 4px 12px rgba(37,99,235,0.3); }
+    .btn-blue:hover { background: #1d4ed8; }
+    .btn-orange { background: #ea580c; color: #fff; box-shadow: 0 4px 12px rgba(234,88,12,0.3); }
+    .btn-orange:hover { background: #c2410c; }
+    .btn-gray { background: #334155; color: #fff; }
+
+    /* بطاقة الاستعلام عن التذكرة */
+    .ticket-search-box { background: var(--card); border-radius: 16px; border: 1.5px solid var(--line); padding: 18px; margin-bottom: 24px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); }
+    .ticket-search-box h3 { font-size: 15px; font-weight: 800; color: var(--primary); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+    .ticket-search-box p { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+    .search-row { display: flex; gap: 8px; }
+    .search-row input { flex: 1; padding: 11px 14px; border-radius: 10px; border: 1.5px solid var(--line); font-size: 14px; outline: none; }
+    .search-row input:focus { border-color: var(--primary); }
+    .search-row button { padding: 11px 18px; background: var(--primary); color: #fff; border: 0; border-radius: 10px; font-weight: bold; font-size: 14px; cursor: pointer; }
+
+    /* قائمة خطوط الجامعات */
+    .lines-section { background: var(--card); border-radius: 18px; border: 1px solid var(--line); padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); margin-bottom: 24px; }
+    .lines-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1.5px solid #f1f5f9; padding-bottom: 10px; }
+    .lines-title { font-size: 16px; font-weight: 800; color: var(--ink); }
+    .lines-badge { font-size: 12px; background: #e0f2fe; color: #0369a1; padding: 2px 10px; border-radius: 20px; font-weight: bold; }
+    
+    .lines-list { display: flex; flex-direction: column; gap: 10px; }
+    .line-row { border: 1px solid #f1f5f9; background: #fafafa; border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .line-name { font-size: 14px; font-weight: 700; color: var(--ink); }
+    .line-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .line-price { font-size: 14px; font-weight: 900; color: #047857; text-align: left; }
+    .line-book-btn { background: #0e7c66; color: #fff; text-decoration: none; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: bold; margin-top: 4px; display: inline-block; }
+
+    footer { text-align: center; font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 20px; }
+    footer a { color: var(--primary); text-decoration: none; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-top">
+      <div class="brand-group">
+        <img src="/icon-192.png" alt="كابتن عز" class="brand-logo">
+        <div>
+          <div class="brand-name">كابتن عز 🚕</div>
+          <div class="brand-sub">باصات الجامعات والمشاوير بالعياط وقراها</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button id="pwaMainBtn" class="install-pwa-btn" onclick="triggerPwaInstall()">
+          <span>📲 تثبيت التطبيق</span>
+        </button>
+        <a href="/admin" class="admin-key-btn" title="لوحة تحكم الإدارة">
+          <span>🔐 الإدارة</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="hero-badge">🎓 نقل جامعي منظم • مشاوير خاصة 24/7 • تذاكر ذكية</div>
+    <h1 class="hero-title">المنظومة الذكية للنقل والجامعات</h1>
+    <p class="hero-sub">خدمة موثوقة لطلاب جامعات مصر وأهالي العياط وقراها. اختر بوابتك للمتابعة والحجز فوراً:</p>
+  </header>
+
+  <div class="container">
+
+    <!-- شبكة البوابات الرئيسية الثلاث (العملاء، السائقين، الإدارة) -->
+    <div class="portal-grid" style="grid-template-columns: 1fr;">
+      <!-- 1. بوابة الراكب / العميل الموحدة -->
+      <div class="portal-card featured" style="border: 2px solid #10b981;">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div class="portal-icon">🎓 🚗</div>
+            <span class="portal-tag tag-student" style="font-size:12px;">بوابة الركاب والعملاء الموحدة</span>
+          </div>
+          <h2 class="portal-title" style="font-size:20px;color:#0e7c66;">حجز باصات الجامعات والمشاوير الخاصة</h2>
+          <p class="portal-desc">
+            بوابة الحجز الموحدة لطلاب وأهالي العياط وقراها: حجز مقاعد باصات الـ 16 جامعة (القاهرة، حلوان، 6 أكتوبر، MSA، MUST...) أو طلب سيارة مشوار خاص وتاكسي بالتفاوض المباشر في صفحة واحدة سهلة وسريعة مع استلام التذكرة الإلكترونية فوراً.
+          </p>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <a href="/book" class="btn-action btn-green" style="flex:1;min-width:200px;">🎫 فتح بوابة حجز الباصات والمشاوير ⬅️</a>
+          <a href="/lines" class="btn-action" style="background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;">مواعيد الـ 16 خط ↗</a>
+        </div>
+      </div>
+
+      <!-- 2. بوابة الكباتن والسائقين (دخول برقم الموبايل) -->
+      <div class="portal-card driver-card" style="border: 2px solid #ea580c;">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div class="portal-icon">👨‍✈️ 🚐</div>
+            <span class="portal-tag tag-driver" style="font-size:12px;">للسائقين والكباتن فقط</span>
+          </div>
+          <h2 class="portal-title" style="font-size:20px;color:#c2410c;">بوابة كباتن الخطوط (دخول برقم الموبايل)</h2>
+          <p class="portal-desc">
+            شاشة السائق الميدانية: سجّل دخولك برقم هاتفك المسجل لتفتح لك قائمة ركاب باصك لليوم، الاتصال بالطلاب بضغطة زر، وتأكيد صعودهم بالزر الأخضر 🟢 لحظياً، مع إمكانية تثبيت الشاشة كتطبيق دائم على هاتفك.
+          </p>
+        </div>
+        <div>
+          <a href="/driver" class="btn-action btn-orange">📲 دخول السائق بالهاتف وكشف الركاب ⬅️</a>
+        </div>
+      </div>
+
+      <!-- 3. بوابة الإدارة والتحكم -->
+      <div class="portal-card" style="border: 2px solid #475569;">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div class="portal-icon">🔐 👑</div>
+            <span class="portal-tag tag-admin" style="font-size:12px;">خاص بكابتن عز والإدارة</span>
+          </div>
+          <h2 class="portal-title" style="font-size:20px;color:#1e293b;">لوحة الإدارة والتحكم الشاملة</h2>
+          <p class="portal-desc">
+            التحكم الكامل في المنظومة: إضافة وتفعيل أرقام السائقين، كشوفات اليوم، متابعة تفاوض المشاوير، حسابات الكباتن، رسائل واتساب، ومزامنة Google Sheets (محمية بكلمة المرور: 442433).
+          </p>
+        </div>
+        <div>
+          <a href="/admin" class="btn-action btn-gray">🔐 دخول لوحة الإدارة (الباسورد: 442433) ⬅️</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- استعلام عن تذكرة -->
+    <div class="ticket-search-box">
+      <h3>🎟️ استعلام ومتابعة التذكرة الإلكترونية</h3>
+      <p>معك كود تذكرة أو تريد تأكيد ركوبك وصعودك للباص؟ أدخل كود التذكرة (مثل EZZ-1001 أو RIDE-2001):</p>
+      <form onsubmit="return goToTicket(event)" class="search-row">
+        <input type="text" id="ticketCodeInput" placeholder="أدخل كود التذكرة (مثال: EZZ-1001)..." required>
+        <button type="submit">🔍 فتح التذكرة</button>
+      </form>
+    </div>
+
+    <!-- قائمة خطوط باصات الجامعات المعتمدة -->
+    <div class="lines-section">
+      <div class="lines-header">
+        <span class="lines-title">🚌 خطوط باصات الجامعات المعتمدة بالعياط</span>
+        <span class="lines-badge">${lineCount} خط متاح</span>
+      </div>
+      <div class="lines-list">
+        ${(lines || []).slice(0, 6).map((l: any) => `
+          <div class="line-row">
+            <div>
+              <div class="line-name">${escHtml(l.name)}</div>
+              <div class="line-meta">⏰ التحرك: ${escHtml(l.departure_time)} • 📍 ${escHtml(l.pickup_point || 'موقف العياط')}</div>
+            </div>
+            <div style="text-align:left;">
+              <div class="line-price">${l.round_trip_price || 60} ج</div>
+              <a href="/book?line=${l.id}" class="line-book-btn">حجز مقعد</a>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      <div style="text-align:center;margin-top:14px;">
+        <a href="/lines" style="color:var(--primary);font-size:13px;font-weight:bold;text-decoration:none;">
+          عرض كل الـ 16 خط والمواعيد والأسعار بالتفصيل ⬅️
+        </a>
+      </div>
+    </div>
+
+    <footer>
+      <div>منظومة <strong>كابتن عز لخدمات النقل الذكي وباصات الجامعات</strong></div>
+      <div>العياط وقراها — محافظة الجيزة 🇪🇬</div>
+      <div style="margin-top:6px;font-size:11px;color:#94a3b8;">برمجة وتطوير: أسامة بسيوني لتطوير المواقع والتطبيقات</div>
+    </footer>
+
+  </div>
+
+  <script>
+  function goToTicket(e) {
+    e.preventDefault();
+    const code = document.getElementById('ticketCodeInput').value.trim();
+    if (code) {
+      window.location.href = '/ticket/' + encodeURIComponent(code);
+    }
+    return false;
+  }
+
+  // PWA Service Worker & Install flow
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+  }
+  let pwaPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    pwaPrompt = e;
+  });
+  function triggerPwaInstall() {
+    if (pwaPrompt) {
+      pwaPrompt.prompt();
+      pwaPrompt = null;
+    } else {
+      alert('📱 لتثبيت تطبيق كابتن عز كأيقونة على هاتفك:\\n1. اضغط على قائمة المتصفح (⋮)\\n2. اختر «تثبيت التطبيق» (Install App) أو «إضافة إلى الشاشة الرئيسية»');
+    }
+  }
+  </script>
+</body>
+</html>`;
+}
+
 

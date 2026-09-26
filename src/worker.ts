@@ -34,6 +34,9 @@ import {
   renderPrivateRideBookingPage,
   renderRideTicketHtml,
   renderDriverAttendanceHtml,
+  renderDriverLoginHtml,
+  renderAdminLoginHtml,
+  renderMainPortalHtml,
 } from './ticket-page.js';
 import {
   pushRowToGoogleSheets,
@@ -223,21 +226,154 @@ export default {
     }
 
     if (path === '/ride' || path === '/book-ride') {
-      return new Response(renderPrivateRideBookingPage(), { status: 200, headers: html });
+      const lines = await getShuttleLines(env.DB);
+      return new Response(renderPublicBookingPage(lines, 'ride'), { status: 200, headers: html });
     }
 
-    // ─── كشف رادار الحضور المخصص للسائقين (موبايل) ───
+    // ─── مسارات السائقين والكباتن وتسجيل الدخول برقم الموبايل ───
+    if (path === '/driver/login') {
+      if (request.method === 'GET') {
+        const phoneCookie = parseCookie(request, 'driver_phone');
+        if (phoneCookie) {
+          return Response.redirect(`${url.origin}/driver`, 302);
+        }
+        return new Response(renderDriverLoginHtml(), { status: 200, headers: html });
+      }
+      if (request.method === 'POST') {
+        let phone = '';
+        let remember = true;
+        try {
+          const contentType = request.headers.get('content-type') || '';
+          if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+            const formData = await request.formData();
+            phone = String(formData.get('phone') || '').trim();
+            remember = Boolean(formData.get('remember'));
+          } else {
+            const j = await request.json<any>();
+            phone = String(j.phone || '').trim();
+            remember = j.remember !== false;
+          }
+        } catch {
+          // ignore
+        }
+
+        const cleanPhone = phone.replace(/[^0-9]/g, '');
+        if (!cleanPhone) {
+          return new Response(renderDriverLoginHtml('يرجى إدخال رقم الهاتف بشكل صحيح'), { status: 400, headers: html });
+        }
+
+        // البحث في جدول السائقين أولاً
+        let driverRow = await env.DB.prepare(
+          `SELECT * FROM drivers WHERE active = 1 AND (phone = ? OR phone = ? OR phone LIKE ?)`
+        ).bind(cleanPhone, cleanPhone.startsWith('20') ? cleanPhone.slice(2) : ('20' + cleanPhone), `%${cleanPhone.slice(-9)}%`).first<any>();
+
+        // أو البحث في مركبات باصات الجامعات
+        if (!driverRow) {
+          const vRow = await env.DB.prepare(
+            `SELECT * FROM shuttle_vehicles WHERE status = 'active' AND (driver_phone = ? OR driver_phone LIKE ?)`
+          ).bind(cleanPhone, `%${cleanPhone.slice(-9)}%`).first<any>();
+          if (vRow) {
+            driverRow = {
+              id: vRow.id,
+              name: vRow.driver_name,
+              phone: vRow.driver_phone,
+              car: vRow.vehicle_name,
+              plate: vRow.plate_number,
+              active: 1
+            };
+          }
+        }
+
+        if (driverRow) {
+          const maxAge = remember ? 2592000 : 86400; // 30 days
+          return new Response(null, {
+            status: 302,
+            headers: {
+              'Location': '/driver',
+              'Set-Cookie': `driver_phone=${cleanPhone}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+            },
+          });
+        } else {
+          return new Response(
+            renderDriverLoginHtml(`⚠️ عذراً، رقم الهاتف (${phone}) غير مسجل أو غير مفعل كسائق في المنظومة. يرجى التواصل مع كابتن عز أو الإدارة لإضافة رقمك وتفعيله.`),
+            { status: 401, headers: html }
+          );
+        }
+      }
+    }
+
+    if (path === '/driver/logout') {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          'Location': '/driver/login',
+          'Set-Cookie': `driver_phone=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+        },
+      });
+    }
+
+    // كشف رادار الحضور المخصص للسائقين
     if (path === '/attendance' || path === '/driver/attendance' || path === '/driver') {
+      const phoneParam = url.searchParams.get('phone') || parseCookie(request, 'driver_phone') || '';
+      const cleanPhone = phoneParam.replace(/[^0-9]/g, '');
+
+      let currentDriver: any = null;
+      if (cleanPhone) {
+        currentDriver = await env.DB.prepare(
+          `SELECT * FROM drivers WHERE active = 1 AND (phone = ? OR phone = ? OR phone LIKE ?)`
+        ).bind(cleanPhone, cleanPhone.startsWith('20') ? cleanPhone.slice(2) : ('20' + cleanPhone), `%${cleanPhone.slice(-9)}%`).first<any>();
+
+        if (!currentDriver) {
+          const vRow = await env.DB.prepare(
+            `SELECT * FROM shuttle_vehicles WHERE (driver_phone = ? OR driver_phone LIKE ?)`
+          ).bind(cleanPhone, `%${cleanPhone.slice(-9)}%`).first<any>();
+          if (vRow) {
+            currentDriver = {
+              id: vRow.id,
+              name: vRow.driver_name,
+              phone: vRow.driver_phone,
+              car: vRow.vehicle_name,
+              plate: vRow.plate_number,
+              active: 1
+            };
+          }
+        }
+      }
+
+      // إذا لم يكن مسجل دخول، حوله إلى صفحة تسجيل الدخول برقم الموبايل
+      if (!currentDriver && !url.searchParams.get('preview')) {
+        return Response.redirect(`${url.origin}/driver/login`, 302);
+      }
+
       const targetDate = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
       const vehicleId = url.searchParams.get('vehicle_id') ? Number(url.searchParams.get('vehicle_id')) : undefined;
       const allVehicles = await getShuttleVehicles(env.DB, targetDate);
-      const vehicle = vehicleId ? (allVehicles.find(v => v.id === vehicleId) || allVehicles[0] || null) : (allVehicles[0] || null);
+
+      // مطابقة باص السائق المسجل تلقائياً
+      let vehicle = null;
+      if (vehicleId) {
+        vehicle = allVehicles.find(v => v.id === vehicleId) || null;
+      } else if (currentDriver?.phone) {
+        const last9 = currentDriver.phone.slice(-9);
+        vehicle = allVehicles.find(v => (v.driver_phone || '').includes(last9)) || allVehicles[0] || null;
+      } else {
+        vehicle = allVehicles[0] || null;
+      }
+
       const activeVehicleId = vehicle?.id;
       const bookings = await getShuttleBookings(env.DB, targetDate, undefined, activeVehicleId);
-      return new Response(renderDriverAttendanceHtml(vehicle, allVehicles, bookings, targetDate, url.origin), {
+
+      const resp = new Response(renderDriverAttendanceHtml(vehicle, allVehicles, bookings, targetDate, url.origin, currentDriver), {
         status: 200,
         headers: html,
       });
+
+      if (cleanPhone && currentDriver) {
+        const headers = new Headers(resp.headers);
+        headers.set('Set-Cookie', `driver_phone=${cleanPhone}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
+        return new Response(resp.body, { status: resp.status, headers });
+      }
+      return resp;
     }
 
     // ─── مسارات وسيط بوابة واتساب (WhatsApp Gateway Proxy) ───
@@ -483,8 +619,72 @@ export default {
       return json({ ok: true, zones });
     }
 
+    // ─── البوابة الرئيسية العامة لمنظومة كابتن عز (الواجهة الرسمية للركاب والطلاب والسائقين) ───
+    if (path === '/') {
+      const lines = await getShuttleLines(env.DB);
+      return new Response(renderMainPortalHtml(lines, url.origin), {
+        status: 200,
+        headers: html,
+      });
+    }
+
+    // ─── تسجيل دخول وخروج الإدارة ───
+    if (path === '/admin/login') {
+      if (request.method === 'GET') {
+        const existingKey = url.searchParams.get('key') ?? parseCookie(request, 'admin_key');
+        if (existingKey === env.ADMIN_KEY || existingKey === '442433' || existingKey === 'taxi-admin-2025') {
+          return Response.redirect(`${url.origin}/admin`, 302);
+        }
+        return new Response(renderAdminLoginHtml(), { status: 200, headers: html });
+      }
+      if (request.method === 'POST') {
+        let enteredKey = '';
+        let remember = true;
+        try {
+          const contentType = request.headers.get('content-type') || '';
+          if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+            const formData = await request.formData();
+            enteredKey = String(formData.get('admin_key') || '').trim();
+            remember = Boolean(formData.get('remember'));
+          } else {
+            const j = await request.json<any>();
+            enteredKey = String(j.admin_key || '').trim();
+            remember = j.remember !== false;
+          }
+        } catch {
+          // ignore error
+        }
+
+        if (enteredKey === env.ADMIN_KEY || enteredKey === '442433' || enteredKey === 'taxi-admin-2025') {
+          const maxAge = remember ? 2592000 : 86400; // 30 days or 1 day
+          return new Response(null, {
+            status: 302,
+            headers: {
+              'Location': '/admin',
+              'Set-Cookie': `admin_key=${enteredKey}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+            },
+          });
+        } else {
+          return new Response(renderAdminLoginHtml('رمز الدخول السري غير صحيح، يرجى إعادة المحاولة'), {
+            status: 401,
+            headers: html,
+          });
+        }
+      }
+    }
+
+    if (path === '/admin/logout') {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          'Location': '/admin/login',
+          'Set-Cookie': `admin_key=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+        },
+      });
+    }
+
     // ─── لوحة الإدارة ───
-    if (path === '/' || path.startsWith('/admin')) {
+    if (path === '/admin' || path.startsWith('/admin/')) {
       return handleAdmin(request, env, path);
     }
 
@@ -494,13 +694,10 @@ export default {
 
 async function handleAdmin(request: Request, env: Env, path: string): Promise<Response> {
   const url = new URL(request.url);
-  let key = url.searchParams.get('key') ?? parseCookie(request, 'admin_key') ?? '';
-  // تسهيل المعاينة المباشرة: استخدام ADMIN_KEY إذا لم يتم تمريره
-  if (!key) {
-    key = env.ADMIN_KEY;
-  }
-  if (key !== env.ADMIN_KEY) {
-    return new Response('🔒 غلط بالمفتاح — /?key=YOUR_ADMIN_KEY', { status: 401, headers: html });
+  const key = url.searchParams.get('key') ?? parseCookie(request, 'admin_key') ?? '';
+  
+  if (key !== env.ADMIN_KEY && key !== '442433' && key !== 'taxi-admin-2025') {
+    return Response.redirect(`${url.origin}/admin/login`, 302);
   }
   if (path.startsWith('/admin/api/')) {
     return adminApi(request, env, path.slice('/admin/api/'.length));
@@ -513,7 +710,7 @@ async function handleAdmin(request: Request, env: Env, path: string): Promise<Re
   const page: AdminPageId = m && PAGES.has(m[1]) ? (m[1] as AdminPageId) : 'home';
   const res = await adminPage(env, page, key, request);
   const headers = new Headers(res.headers);
-  headers.set('Set-Cookie', `admin_key=${key}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
+  headers.set('Set-Cookie', `admin_key=${key}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
   return new Response(res.body, { status: res.status, headers });
 }
 

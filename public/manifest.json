@@ -50,24 +50,31 @@
   ],
   "shortcuts": [
     {
-      "name": "حجز تذكرة باص جديدة",
+      "name": "حجز باص جامعة",
       "short_name": "حجز باص",
       "description": "حجز مقعد في باصات الجامعات من العياط",
       "url": "/book",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "رادار الحضور والركوب الحي",
-      "short_name": "الحضور",
-      "description": "متابعة ركاب الباصات الحاضرين والمنتظرين",
-      "url": "/admin/attendance",
+      "name": "طلب مشوار خاص",
+      "short_name": "مشوار خاص",
+      "description": "طلب تاكسي ومشوار خاص بالتفاوض",
+      "url": "/ride",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "كشوفات باصات الجامعات",
-      "short_name": "الباصات",
-      "description": "كشف رحلات وباصات 16 جامعة",
-      "url": "/admin/shuttle",
+      "name": "رادار كشف حضور السائقين",
+      "short_name": "رادار السائق",
+      "description": "كشف حضور وركاب باصات الجامعات",
+      "url": "/driver",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "لوحة تحكم كابتن عز",
+      "short_name": "الإدارة",
+      "description": "لوحة التحكم والحسابات وبوت الواتساب",
+      "url": "/admin",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     }
   ]

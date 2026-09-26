@@ -47,7 +47,7 @@ const { d1 } = getDatabase();
 
 const env: Env = {
   DB: d1 as unknown as D1Database,
-  ADMIN_KEY: process.env.ADMIN_KEY || 'taxi-admin-2025',
+  ADMIN_KEY: process.env.ADMIN_KEY || '442433',
   AI_BASE_URL: process.env.AI_BASE_URL,
   AI_API_KEY: process.env.AI_API_KEY || process.env.GEMINI_API_KEY,
   AI_MODEL: process.env.AI_MODEL,
